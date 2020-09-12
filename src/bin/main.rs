@@ -162,56 +162,26 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
     }
 }
 
-fn apply_mapping<F>(f: F, lines: Vec<Vec<Point2>>) -> Vec<Vec<Point2>>
-where
-    F: Fn(Point2) -> Point2,
-{
-    lines
-        .into_iter()
-        .map(|line| line.into_iter().map(|z| f(z)).collect())
-        .collect()
-}
-
-fn to_screen_coord(lines: Vec<Vec<Point2>>, model: &Model) -> Vec<Vec<Point2>> {
-    lines
-        .into_iter()
-        .map(|line| {
-            line.into_iter()
-                .map(|z| z * model.scale + model.position)
-                .collect()
-        })
-        .collect()
-}
-
 // Draw the state of your `Model` into the given `Frame` here.
 fn view(app: &App, model: &Model, frame: Frame) {
-    let mut lines = create_gridlines(
+    let (points, line_structure) = create_gridlines(
         model.resolution,
         model.x_min,
         model.x_max,
         model.y_min,
         model.y_max,
     );
-    if model.apply_function {
-        lines = apply_mapping(|z| pt2(z[0]*z[0] - z[1]*z[1], 2.0*z[0]*z[1]), lines);
-        //lines = apply_mapping(
-        //    |z| {
-        //        pt2(
-        //            z[0] * z[0] * z[0] - 3.0 * z[0] * z[1] * z[1],
-        //            3.0 * z[0] * z[0] * z[1] - z[1] * z[1] * z[1],
-        //        )
-        //   },
-        //    lines,
-        //);
-    }
+    let points = points.map(|z| if model.apply_function {z.sqrt()} else {z});
+    let mut points = points.map(|z| pt2(z.re, z.im) * model.scale + model.position);
+
     // Begin drawing
     let draw = app.draw();
 
     draw.background().rgb(0.02, 0.02, 0.02);
-
-    for line in to_screen_coord(lines, model).into_iter() {
+    for line_len in line_structure {
+        let line: Vec<_> = points.by_ref().take(line_len).collect();
         draw.polyline()
-            .weight(model.scale / 50.0)
+            .weight(2.0)
             .color(srgba(1.0, 1.0, 1.0, 1.0))
             .points(line);
     }
