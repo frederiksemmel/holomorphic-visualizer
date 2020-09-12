@@ -1,7 +1,6 @@
 use nannou::prelude::*;
 use num::complex::Complex;
 use cmp::max;
-use mexpr::num::ComplexFloat;
 
 pub fn create_gridlines(
     resolution: f32,
