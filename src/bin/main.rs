@@ -23,7 +23,6 @@ struct Model {
 widget_ids! {
     struct Ids {
         scale,
-        position,
         apply_function,
         resolution,
         x_min,
@@ -35,9 +34,7 @@ widget_ids! {
 
 fn model(app: &App) -> Model {
     // Set the loop mode to wait for events, an energy-efficient option for pure-GUI apps.
-    app.new_window()
-        .build()
-        .unwrap();
+    app.new_window().mouse_wheel(mouse_wheel).build().unwrap();
     app.set_loop_mode(LoopMode::Wait);
 
     // Create the UI.
@@ -70,6 +67,15 @@ fn model(app: &App) -> Model {
     }
 }
 
+fn mouse_wheel(_app: &App, model: &mut Model, dt: MouseScrollDelta, _phase: TouchPhase) {
+    match dt {
+        MouseScrollDelta::PixelDelta(pos) => {
+            model.position -= pt2(pos.x as f32 * 8.0, pos.y as f32 * 8.0)
+        }
+        _ => {}
+    }
+}
+
 fn update(_app: &App, model: &mut Model, _update: Update) {
     // Calling `set_widgets` allows us to instantiate some widgets.
     let ui = &mut model.ui.set_widgets();
@@ -89,26 +95,6 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
         .set(model.ids.scale, ui)
     {
         model.scale = value;
-    }
-
-    for (x, y) in widget::XYPad::new(
-        model.position.x,
-        -1000.0,
-        1000.0,
-        model.position.y,
-        -1000.0,
-        1000.0,
-    )
-    .down(10.0)
-    .w_h(200.0, 200.0)
-    .label("Position")
-    .label_font_size(15)
-    .rgb(0.3, 0.3, 0.3)
-    .label_rgb(1.0, 1.0, 1.0)
-    .border(0.0)
-    .set(model.ids.position, ui)
-    {
-        model.position = Point2::new(x, y);
     }
 
     for value in widget::Toggle::new(model.apply_function)
@@ -174,7 +160,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
         model.y_min,
         model.y_max,
     );
-    let points = points.map(|z| if model.apply_function {z * z} else {z});
+    let points = points.map(|z| if model.apply_function { z * z } else { z });
     let mut points = points.map(|z| pt2(z.re, z.im) * model.scale + model.position);
 
     // Begin drawing
