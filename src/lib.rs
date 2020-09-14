@@ -1,6 +1,5 @@
 use nannou::prelude::*;
 use num::complex::Complex;
-use cmp::max;
 
 pub fn create_gridlines(
     resolution: f32,
@@ -34,7 +33,7 @@ pub fn create_gridlines(
     let y_lines = xs
         .flat_map(move |x| ys.clone().map(move |y| Complex::new(x, y)));
     let points = x_lines.chain(y_lines);
-    let mut line_structure = vec![x_len as usize; cmp::max(0,y_len) as usize];
-    line_structure.extend(vec![y_len as usize; cmp::max(0,x_len) as usize]);
+    let mut line_structure = vec![x_len as usize; std::cmp::max(0,y_len) as usize];
+    line_structure.extend(vec![y_len as usize; std::cmp::max(0,x_len) as usize]);
     (points, line_structure)
 }

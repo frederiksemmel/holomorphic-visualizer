@@ -47,7 +47,7 @@ fn model(app: &App) -> Model {
     let scale = 100.0;
     let position = pt2(0.0, 0.0);
     let apply_function = true;
-    let resolution = 0.0;
+    let resolution = 2.0;
     let x_min = -5.0;
     let x_max = 5.0;
     let y_min = -5.0;
@@ -121,7 +121,7 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
         model.apply_function = value;
     }
 
-    for value in slider(model.resolution, -2.0, 4.0)
+    for value in slider(model.resolution, 0.0, 5.0)
         .down(10.0)
         .label("Resolution")
         .set(model.ids.resolution, ui)
@@ -171,7 +171,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
         model.y_min,
         model.y_max,
     );
-    let points = points.map(|z| if model.apply_function {z.sqrt()} else {z});
+    let points = points.map(|z| if model.apply_function {z * z} else {z});
     let mut points = points.map(|z| pt2(z.re, z.im) * model.scale + model.position);
 
     // Begin drawing
