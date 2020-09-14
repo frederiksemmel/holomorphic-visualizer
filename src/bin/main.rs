@@ -4,7 +4,7 @@ extern crate hologrid;
 use hologrid::create_gridlines;
 
 fn main() {
-    nannou::app(model).update(update).simple_window(view).run();
+    nannou::app(model).update(update).view(view).run();
 }
 
 struct Model {
@@ -35,6 +35,9 @@ widget_ids! {
 
 fn model(app: &App) -> Model {
     // Set the loop mode to wait for events, an energy-efficient option for pure-GUI apps.
+    app.new_window()
+        .build()
+        .unwrap();
     app.set_loop_mode(LoopMode::Wait);
 
     // Create the UI.

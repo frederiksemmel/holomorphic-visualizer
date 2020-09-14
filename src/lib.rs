@@ -37,3 +37,40 @@ pub fn create_gridlines(
     line_structure.extend(vec![y_len as usize; std::cmp::max(0,x_len) as usize]);
     (points, line_structure)
 }
+pub fn create_gridlines_simple(
+    resolution: f32,
+    x_min: f32,
+    x_max: f32,
+    y_min: f32,
+    y_max: f32,
+) -> Vec<Vec<(f32, f32)>> {
+    let x_len: i16 = ((x_max.floor() - x_min.ceil() + 1.0) * resolution) as i16;
+    let xs: Vec<f32> = (0i16..x_len)
+        .map(std::convert::From::from)
+        .map(|x: f32| x / resolution + x_min.ceil())
+        .collect();
+    let y_len: i16 = ((y_max.floor() - y_min.ceil() + 1.0) * resolution) as i16;
+    let ys: Vec<f32> = (0i16..y_len)
+        .map(std::convert::From::from)
+        .map(|y: f32| y / resolution + y_min.ceil())
+        .collect();
+
+    let mut x_lines: Vec<Vec<(f32, f32)>> = Vec::new();
+    for y in &ys {
+        let mut x_line: Vec<(f32, f32)> = Vec::new();
+        for x in &xs {
+            x_line.push((*x, *y));
+        }
+        x_lines.push(x_line);
+    }
+
+    let mut y_lines: Vec<Vec<(f32, f32)>> = Vec::new();
+    for x in &xs {
+        let mut y_line: Vec<(f32, f32)> = Vec::new();
+        for y in &ys {
+            y_line.push((*x, *y));
+        }
+        y_lines.push(y_line);
+    }
+    [&x_lines[..], &y_lines[..]].concat()
+}
