@@ -18,6 +18,12 @@ struct Model {
     x_max: f32,
     y_min: f32,
     y_max: f32,
+    left_bound_active: bool,
+    right_bound_active: bool,
+    top_bound_active: bool,
+    bottom_bound_active: bool,
+    zoom_active: bool,
+    resolution_active: bool,
 }
 
 widget_ids! {
@@ -34,7 +40,12 @@ widget_ids! {
 
 fn model(app: &App) -> Model {
     // Set the loop mode to wait for events, an energy-efficient option for pure-GUI apps.
-    app.new_window().mouse_wheel(mouse_wheel).build().unwrap();
+    app.new_window()
+        .mouse_wheel(mouse_wheel)
+        .key_pressed(key_pressed)
+        .key_released(key_released)
+        .build()
+        .unwrap();
     app.set_loop_mode(LoopMode::Wait);
 
     // Create the UI.
@@ -52,6 +63,14 @@ fn model(app: &App) -> Model {
     let x_max = 5.0;
     let y_min = -5.0;
     let y_max = 5.0;
+    let (
+        left_bound_active,
+        right_bound_active,
+        top_bound_active,
+        bottom_bound_active,
+        zoom_active,
+        resolution_active,
+    ) = (false, false, false, false, false, false);
 
     Model {
         ui,
@@ -64,13 +83,70 @@ fn model(app: &App) -> Model {
         x_max,
         y_min,
         y_max,
+        right_bound_active,
+        left_bound_active,
+        top_bound_active,
+        bottom_bound_active,
+        zoom_active,
+        resolution_active
+    }
+}
+
+fn key_pressed(_app: &App, model: &mut Model, key: Key) {
+    match key {
+        Key::A => model.left_bound_active = true,
+        Key::D => model.right_bound_active = true,
+        Key::W => model.top_bound_active = true,
+        Key::S => model.bottom_bound_active = true,
+        Key::LShift => model.zoom_active = true,
+        Key::Space => model.apply_function = !model.apply_function,
+        Key::LControl => model.resolution_active = true,
+        _ => {}
+    }
+}
+
+fn key_released(_app: &App, model: &mut Model, key: Key) {
+    match key {
+        Key::A => model.left_bound_active = false,
+        Key::D => model.right_bound_active = false,
+        Key::W => model.top_bound_active = false,
+        Key::S => model.bottom_bound_active = false,
+        Key::LShift => model.zoom_active = false,
+        Key::LControl => model.resolution_active = false,
+        _ => {}
     }
 }
 
 fn mouse_wheel(_app: &App, model: &mut Model, dt: MouseScrollDelta, _phase: TouchPhase) {
     match dt {
         MouseScrollDelta::PixelDelta(pos) => {
-            model.position -= pt2(pos.x as f32 * 8.0, pos.y as f32 * 8.0)
+            if model.left_bound_active {
+                model.x_min -= pos.x as f32 / pow(2.0, model.resolution as usize) as f32 / 2.0
+            }
+            if model.right_bound_active {
+                model.x_max -= pos.x as f32 / pow(2.0, model.resolution as usize) as f32 / 2.0
+            }
+            if model.top_bound_active {
+                model.y_max -= pos.y as f32 / pow(2.0, model.resolution as usize) as f32 / 2.0
+            }
+            if model.bottom_bound_active {
+                model.y_min -= pos.y as f32 / pow(2.0, model.resolution as usize) as f32 / 2.0
+            }
+            if model.zoom_active {
+                model.scale += pos.y as f32
+            }
+            if model.resolution_active {
+                model.resolution += pos.y as f32 / 20.0
+            }
+            if !model.left_bound_active
+                && !model.right_bound_active
+                && !model.top_bound_active
+                && !model.bottom_bound_active
+                && !model.zoom_active
+                && !model.resolution_active
+            {
+                model.position -= pt2(pos.x as f32 * 8.0, pos.y as f32 * 8.0)
+            }
         }
         _ => {}
     }
