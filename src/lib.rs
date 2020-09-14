@@ -8,7 +8,7 @@ pub fn create_gridlines(
     y_min: f32,
     y_max: f32,
 ) -> (impl Iterator<Item = Complex<f32>>, Vec<usize>)  {
-    let resolution = pow(2, resolution.floor() as usize) as f32;
+    let resolution = pow(2, resolution.floor().min(5.0) as usize) as f32;
     let x_min = (x_min * resolution).ceil() / resolution;
     let x_max = (x_max * resolution).floor() / resolution;
     let y_min = (y_min * resolution).ceil() / resolution;
