@@ -1,5 +1,6 @@
 use nannou::prelude::*;
 use nannou::ui::prelude::*;
+use num::Complex;
 extern crate hologrid;
 use hologrid::create_gridlines;
 
@@ -18,6 +19,7 @@ struct Model {
     x_max: f32,
     y_min: f32,
     y_max: f32,
+    parameter_1: Complex<f32>,
 }
 
 widget_ids! {
@@ -29,12 +31,17 @@ widget_ids! {
         x_max,
         y_min,
         y_max,
+        parameter_1,
     }
 }
 
 fn model(app: &App) -> Model {
     // Set the loop mode to wait for events, an energy-efficient option for pure-GUI apps.
-    app.new_window().mouse_wheel(mouse_wheel).build().unwrap();
+    app.new_window()
+        .key_released(key_released)
+        .mouse_wheel(mouse_wheel)
+        .build()
+        .unwrap();
     app.set_loop_mode(LoopMode::Wait);
 
     // Create the UI.
@@ -52,6 +59,7 @@ fn model(app: &App) -> Model {
     let x_max = 1.0;
     let y_min = 0.0;
     let y_max = 1.0;
+    let parameter_1 = Complex::<f32>::new(1.0, 0.0);
 
     Model {
         ui,
@@ -64,6 +72,15 @@ fn model(app: &App) -> Model {
         x_max,
         y_min,
         y_max,
+        parameter_1,
+    }
+}
+
+fn key_released(_app: &App, model: &mut Model, key: Key) {
+    match key {
+        Key::Space => model.apply_function = !model.apply_function,
+        Key::R => model.parameter_1 = Complex::new(1.0, 0.0),
+        _ => {}
     }
 }
 
@@ -169,18 +186,38 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
     {
         model.y_max = value;
     }
+    for (x, y) in widget::XYPad::new(
+        model.parameter_1.re,
+        -3.0,
+        3.0,
+        model.parameter_1.im,
+        -3.0,
+        3.0,
+    )
+    .down(10.0)
+    .w_h(200.0, 200.0)
+    .label("Parameter 1")
+    .label_font_size(15)
+    .rgb(0.3, 0.3, 0.3)
+    .label_rgb(1.0, 1.0, 1.0)
+    .border(0.0)
+    .set(model.ids.parameter_1, ui)
+    {
+        model.parameter_1 = Complex::<f32>::new(x, y);
+    }
 }
 
 // Draw the state of your `Model` into the given `Frame` here.
 fn view(app: &App, model: &Model, frame: Frame) {
     let (points, line_structure) = create_gridlines(
+        4.0,
         model.resolution,
         model.x_min,
         model.x_max,
         model.y_min,
         model.y_max,
     );
-    let points = points.map(|z| if model.apply_function { (z * z).exp() } else { z });
+    let points = points.map(|z| if model.apply_function { (model.parameter_1*z) } else { z });
     let mut points = points.map(|z| (pt2(z.re, z.im) + model.position) * model.scale.exp());
 
     // Begin drawing
