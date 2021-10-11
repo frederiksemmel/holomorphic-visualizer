@@ -31,6 +31,7 @@ On Windows you are on your own...
     * `[w|a|s|d] + scroll` to make the grid bigger along these sides.
       Can be pressed at the same time
     * `space` to toggle applying the function
+    * `r` to reset the parameter to 1
     * use the parameter control on the left with your mouse to control the parameter
 
 
