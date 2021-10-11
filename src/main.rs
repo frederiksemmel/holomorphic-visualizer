@@ -1,8 +1,7 @@
+use conformal_visualizer::create_gridlines;
 use nannou::prelude::*;
 use nannou::ui::prelude::*;
 use num::Complex;
-extern crate hologrid;
-use hologrid::create_gridlines;
 
 fn main() {
     nannou::app(model).update(update).view(view).run();
@@ -207,6 +206,23 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
     }
 }
 
+fn coordinate_lines(model: &Model) -> Vec<Vec<Point2>> {
+    vec![
+        vec![
+            to_screen_coords(-1.0, 0.0, model),
+            to_screen_coords(1.0, 0.0, model),
+        ],
+        vec![
+            to_screen_coords(0.0, -1.0, model),
+            to_screen_coords(0.0, 1.0, model),
+        ],
+    ]
+}
+
+fn to_screen_coords(x: f32, y: f32, model: &Model) -> Point2 {
+    (pt2(x, y) + model.position) * model.scale.exp()
+}
+
 // Draw the state of your `Model` into the given `Frame` here.
 fn view(app: &App, model: &Model, frame: Frame) {
     let (points, line_structure) = create_gridlines(
@@ -217,13 +233,31 @@ fn view(app: &App, model: &Model, frame: Frame) {
         model.y_min,
         model.y_max,
     );
-    let points = points.map(|z| if model.apply_function { (model.parameter_1*z) } else { z });
-    let mut points = points.map(|z| (pt2(z.re, z.im) + model.position) * model.scale.exp());
+    let points = points.map(|z| {
+        if model.apply_function {
+            // change this to visualize a different function
+            (z * model.parameter_1).exp()
+        } else {
+            z
+        }
+    });
+    let mut points = points.map(|z| to_screen_coords(z.re, z.im, model));
 
     // Begin drawing
     let draw = app.draw();
 
     draw.background().rgb(0.02, 0.02, 0.02);
+
+    for coord_line in coordinate_lines(&model) {
+        draw.arrow()
+            .weight(1.0)
+            .head_length(0.1 * model.scale.exp())
+            .head_width(0.05 * model.scale.exp())
+            .color(srgba(1.0, 1.0, 1.0, 1.0))
+            .start(coord_line[0])
+            .end(coord_line[1]);
+    }
+
     for line_len in line_structure {
         let line: Vec<_> = points.by_ref().take(line_len).collect();
         draw.polyline()
