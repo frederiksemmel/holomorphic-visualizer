@@ -247,7 +247,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
     let points = points.map(|z| {
         if model.apply_function {
             // change this to visualize a different function
-            z * z * z * model.parameter_1
+            (1.0 - z) / (1.0 + z) * model.parameter_1
         } else {
             z
         }
