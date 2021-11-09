@@ -19,6 +19,7 @@ struct Model {
     y_min: f32,
     y_max: f32,
     parameter_1: Complex<f32>,
+    parameter_homotopy: f32,
 }
 
 widget_ids! {
@@ -31,6 +32,7 @@ widget_ids! {
         y_min,
         y_max,
         parameter_1,
+        parameter_homotopy,
     }
 }
 
@@ -59,6 +61,7 @@ fn model(app: &App) -> Model {
     let y_min = 0.0;
     let y_max = 1.0;
     let parameter_1 = Complex::<f32>::new(1.0, 0.0);
+    let parameter_homotopy = 0.0;
 
     Model {
         ui,
@@ -72,6 +75,7 @@ fn model(app: &App) -> Model {
         y_min,
         y_max,
         parameter_1,
+        parameter_homotopy,
     }
 }
 
@@ -204,6 +208,13 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
     {
         model.parameter_1 = Complex::<f32>::new(x, y);
     }
+    for value in slider(model.parameter_homotopy, 0.0, 1.0)
+        .down(10.0)
+        .label("homotopy parameter")
+        .set(model.ids.parameter_homotopy, ui)
+    {
+        model.parameter_homotopy = value;
+    }
 }
 
 fn coordinate_lines(model: &Model) -> Vec<Vec<Point2>> {
@@ -236,7 +247,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
     let points = points.map(|z| {
         if model.apply_function {
             // change this to visualize a different function
-            (z * model.parameter_1).exp()
+            z * z * z * model.parameter_1
         } else {
             z
         }

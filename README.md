@@ -34,4 +34,10 @@ On Windows you are on your own...
     * `r` to reset the parameter to 1
     * use the parameter control on the left with your mouse to control the parameter
 
+## Examples
 
+The exponential function of course looks like this:
+![exp(z)](/examples/exponential.png)
+
+While z^3 looks like this shape when applied to a tall rectangle just right of 0:
+![exp(z)](/examples/z^3.png)
