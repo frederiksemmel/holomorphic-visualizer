@@ -12,7 +12,9 @@ This is a Möbius Transformation, in particular (1-z)/(1+z), but it should be ca
 a Mickey Mouse function, as every Möbius Transformation contains a Mickey Mouse 
 (unproven Conjecture)
 
-![mickey_mouse](/examples/mickey_mouse.png)## Installation
+![mickey_mouse](/examples/mickey_mouse.png)
+
+## Installation
 
 On Linux and macOS:
 * Install the rust toolchain in order to have cargo installed by following
