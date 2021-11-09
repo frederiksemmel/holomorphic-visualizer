@@ -1,6 +1,18 @@
 # Conformal Map Visualizer
 
-## Installation
+## Examples
+
+The exponential function of course looks like this:
+![exp(z)](/examples/exponential.png)
+
+While z^3 looks like this shape when applied to a tall rectangle just right of 0:
+![z^3](/examples/z^3.png)
+
+This is a Möbius Transformation, in particular (1-z)/(1+z), but it should be called
+a Mickey Mouse function, as every Möbius Transformation contains a Mickey Mouse 
+(unproven Conjecture)
+
+![mickey_mouse](/examples/mickey_mouse.png)## Installation
 
 On Linux and macOS:
 * Install the rust toolchain in order to have cargo installed by following
@@ -34,16 +46,3 @@ On Windows you are on your own...
     * `r` to reset the parameter to 1
     * use the parameter control on the left with your mouse to control the parameter
 
-## Examples
-
-The exponential function of course looks like this:
-![exp(z)](/examples/exponential.png)
-
-While z^3 looks like this shape when applied to a tall rectangle just right of 0:
-![z^3](/examples/z^3.png)
-
-This is a Möbius Transformation, in particular (1-z)/(1+z), but it should be called
-a Mickey Mouse function, as every Möbius Transformation contains a Mickey Mouse 
-(unproven Conjecture)
-
-![mickey_mouse](/examples/mickey_mouse.png)
