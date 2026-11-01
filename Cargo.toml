@@ -9,11 +9,13 @@ name = "conformal-visualizer"
 path = "src/main.rs"
 
 [dependencies]
-eframe = "0.34"
+nannou = { version = "0.20", features = ["egui"] }
+# Only for `MouseScrollUnit`, which nannou doesn't re-export; same version nannou uses.
+bevy_input = { version = "0.19", default-features = false }
 num = "0.4"
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 
 [[bench]]
 name = "gridlines"
