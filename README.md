@@ -1,5 +1,7 @@
 # Conformal Map Visualizer
 
+Built with [nannou](https://nannou.cc) 0.20 (on Bevy) and its egui integration.
+
 ## Examples
 
 The exponential function of course looks like this:
@@ -17,8 +19,10 @@ a Mickey Mouse function, as every Möbius Transformation contains a Mickey Mouse
 ## Development
 
 The dev environment is managed with [devenv](https://devenv.sh); enter it with
-`devenv shell`. It provides the Rust toolchain and the runtime libraries (Vulkan/GL, Wayland, X11)
-the window needs.
+`devenv shell`. It provides the Rust toolchain, fontconfig for building, and the
+runtime libraries (Vulkan/GL, Wayland, X11) the window needs.
+
+The first build compiles Bevy (~590 crates), so expect a few minutes.
 
 ```sh
 cargo run --release   # run the visualizer
@@ -59,6 +63,6 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       more than one at once
     * `space` to toggle applying the function
     * `r` to reset the parameter to 1
-    * the side panel has sliders for everything, an XY pad for the parameter,
+    * the control window has sliders for everything, an XY pad for the parameter,
       and a homotopy slider that blends from the identity (0) to `f` (1)
 

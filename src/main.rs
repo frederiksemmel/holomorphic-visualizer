@@ -1,17 +1,18 @@
+use bevy_input::mouse::MouseScrollUnit;
 use conformal_visualizer::create_gridlines;
-use eframe::egui::{self, Color32, Key, MouseWheelUnit, Pos2, Rect, Sense, Stroke, Vec2, vec2};
+use nannou::prelude::*;
 use num::Complex;
 
 /// The function being visualized. Change this to look at a different map.
 ///
-/// `p` is the complex parameter controlled with the XY pad in the side panel.
+/// `p` is the complex parameter controlled with the XY pad in the control window.
 /// See <https://docs.rs/num-complex/latest/num_complex/struct.Complex.html>
 /// for the available functions (`exp`, `ln`, `powc`, `sin`, ...).
 fn f(z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
     (1.0 - z) / (1.0 + z) * p
 }
 
-/// Shown in the side panel; keep in sync with [`f`].
+/// Shown in the control window; keep in sync with [`f`].
 const FUNCTION_LABEL: &str = "f(z) = p · (1 − z) / (1 + z)";
 
 /// Number of points per grid segment, so lines bend smoothly under `f`.
@@ -20,22 +21,15 @@ const SEGMENT_RESOLUTION: f32 = 4.0;
 const POINTS_PER_LINE: f32 = 24.0;
 /// Drop polyline points beyond this distance from the origin (poles of `f`).
 const MAX_SCREEN_COORD: f32 = 1.0e5;
+const MAX_RESOLUTION: f32 = 6.0;
+const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=20_000.0;
 
-fn main() -> eframe::Result {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Conformal Map Visualizer")
-            .with_inner_size([1200.0, 800.0]),
-        ..Default::default()
-    };
-    eframe::run_native(
-        "conformal-visualizer",
-        options,
-        Box::new(|_cc| Ok(Box::new(Visualizer::default()))),
-    )
+fn main() {
+    nannou::app(model).update(update).run();
 }
 
-struct Visualizer {
+struct Model {
+    window: Entity,
     /// Screen points per unit length in the complex plane.
     pixels_per_unit: f32,
     /// Offset of the complex plane, in plane units.
@@ -50,260 +44,243 @@ struct Visualizer {
     parameter: Complex<f32>,
     /// Blend between the identity (0) and `f` (1).
     homotopy: f32,
+    /// Last cursor position while dragging the canvas.
+    drag_from: Option<Vec2>,
 }
 
-impl Default for Visualizer {
-    fn default() -> Self {
-        Self {
-            pixels_per_unit: 150.0,
-            position: Vec2::ZERO,
-            apply_function: true,
-            resolution: 2.0,
-            x_min: 0.0,
-            x_max: 1.0,
-            y_min: 0.0,
-            y_max: 1.0,
-            parameter: Complex::new(1.0, 0.0),
-            homotopy: 1.0,
+fn model(app: &App) -> Model {
+    let window = app
+        .new_window()
+        .primary()
+        .title("Conformal Map Visualizer")
+        .size(1200, 800)
+        .view(view)
+        .key_pressed(key_pressed)
+        .mouse_wheel(mouse_wheel)
+        .build();
+    // Only redraw on input; the picture is static otherwise.
+    app.set_update_mode(UpdateMode::wait());
+
+    Model {
+        window,
+        pixels_per_unit: 150.0,
+        position: Vec2::ZERO,
+        apply_function: true,
+        resolution: 2.0,
+        x_min: 0.0,
+        x_max: 1.0,
+        y_min: 0.0,
+        y_max: 1.0,
+        parameter: Complex::new(1.0, 0.0),
+        homotopy: 1.0,
+        drag_from: None,
+    }
+}
+
+fn update(app: &App, model: &mut Model) {
+    let ctx = app.egui_for_window(model.window);
+
+    egui::Window::new("Conformal Map")
+        .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
+        .resizable(false)
+        .show(&ctx, |ui| controls(ui, model));
+
+    // Drag the canvas to pan, unless the drag started on the UI.
+    let buttons = app.mouse_buttons();
+    let mouse = app.mouse();
+    if buttons.just_pressed(MouseButton::Left) && !ctx.is_pointer_over_egui() {
+        model.drag_from = Some(mouse);
+    }
+    if !buttons.pressed(MouseButton::Left) {
+        model.drag_from = None;
+    }
+    if let Some(from) = model.drag_from {
+        model.position += (mouse - from) / model.pixels_per_unit;
+        model.drag_from = Some(mouse);
+    }
+}
+
+fn controls(ui: &mut egui::Ui, model: &mut Model) {
+    ui.monospace(FUNCTION_LABEL);
+    ui.separator();
+
+    ui.add(
+        egui::Slider::new(&mut model.pixels_per_unit, SCALE_RANGE)
+            .logarithmic(true)
+            .text("Scale"),
+    );
+    ui.checkbox(&mut model.apply_function, "Apply function (space)");
+    ui.add(egui::Slider::new(&mut model.homotopy, 0.0..=1.0).text("Homotopy"));
+    ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_RESOLUTION).text("Resolution"));
+
+    ui.separator();
+    ui.label("Grid domain");
+    for (value, label) in [
+        (&mut model.x_min, "x min"),
+        (&mut model.x_max, "x max"),
+        (&mut model.y_min, "y min"),
+        (&mut model.y_max, "y max"),
+    ] {
+        ui.add(egui::Slider::new(value, -15.0..=15.0).text(label));
+    }
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label("Parameter p");
+        if ui.button("Reset (r)").clicked() {
+            model.parameter = Complex::new(1.0, 0.0);
         }
-    }
-}
-
-impl eframe::App for Visualizer {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.handle_keys(ui.ctx());
-
-        egui::Panel::left("controls")
-            .resizable(false)
-            .show_inside(ui, |ui| self.controls(ui));
-
-        egui::CentralPanel::no_frame()
-            .frame(egui::Frame::NONE.fill(Color32::from_gray(5)))
-            .show_inside(ui, |ui| self.canvas(ui));
-    }
-}
-
-impl Visualizer {
-    fn handle_keys(&mut self, ctx: &egui::Context) {
-        ctx.input(|i| {
-            if i.key_pressed(Key::Space) {
-                self.apply_function = !self.apply_function;
-            }
-            if i.key_pressed(Key::R) {
-                self.parameter = Complex::new(1.0, 0.0);
-            }
-        });
-    }
-
-    fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(8.0);
-        ui.heading("Conformal Map");
-        ui.monospace(FUNCTION_LABEL);
-        ui.separator();
-
+    });
+    ui.horizontal(|ui| {
         ui.add(
-            egui::Slider::new(&mut self.pixels_per_unit, 1.0..=20_000.0)
-                .logarithmic(true)
-                .text("Scale"),
+            egui::DragValue::new(&mut model.parameter.re)
+                .speed(0.01)
+                .prefix("re "),
         );
-        ui.checkbox(&mut self.apply_function, "Apply function (space)");
-        ui.add(egui::Slider::new(&mut self.homotopy, 0.0..=1.0).text("Homotopy"));
-        ui.add(egui::Slider::new(&mut self.resolution, 0.0..=6.0).text("Resolution"));
-
-        ui.separator();
-        ui.label("Grid domain");
-        for (value, label) in [
-            (&mut self.x_min, "x min"),
-            (&mut self.x_max, "x max"),
-            (&mut self.y_min, "y min"),
-            (&mut self.y_max, "y max"),
-        ] {
-            ui.add(egui::Slider::new(value, -15.0..=15.0).text(label));
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("Parameter p");
-            if ui.button("Reset (r)").clicked() {
-                self.parameter = Complex::new(1.0, 0.0);
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut self.parameter.re)
-                    .speed(0.01)
-                    .prefix("re "),
-            );
-            ui.add(
-                egui::DragValue::new(&mut self.parameter.im)
-                    .speed(0.01)
-                    .prefix("im "),
-            );
-        });
-        xy_pad(ui, &mut self.parameter, 3.0);
-
-        ui.separator();
-        ui.small(
-            "scroll: pan · shift+scroll: zoom · ctrl+scroll: resolution\n\
-             hold w/a/s/d + scroll: move that edge of the grid",
+        ui.add(
+            egui::DragValue::new(&mut model.parameter.im)
+                .speed(0.01)
+                .prefix("im "),
         );
+    });
+    xy_pad(ui, &mut model.parameter, 3.0);
+
+    ui.separator();
+    ui.small(
+        "scroll / drag: pan · shift+scroll: zoom · ctrl+scroll: resolution\n\
+         hold w/a/s/d + scroll: move that edge of the grid",
+    );
+}
+
+fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
+    if app
+        .egui_for_window(model.window)
+        .egui_wants_keyboard_input()
+    {
+        return;
     }
-
-    fn canvas(&mut self, ui: &mut egui::Ui) {
-        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::drag());
-        let rect = response.rect;
-
-        if response.dragged() {
-            let d = response.drag_delta() / self.pixels_per_unit;
-            self.position += vec2(d.x, -d.y);
-        }
-        if response.hovered() {
-            self.handle_scroll(ui.ctx());
-        }
-
-        let to_screen = |z: Complex<f32>| self.to_screen(rect, z);
-
-        // Coordinate axes from -1 to 1.
-        let axis = Stroke::new(1.0_f32, Color32::from_gray(160));
-        let head = (0.1 * self.pixels_per_unit, 0.05 * self.pixels_per_unit);
-        arrow(
-            &painter,
-            to_screen(Complex::new(-1.0, 0.0)),
-            to_screen(Complex::new(1.0, 0.0)),
-            head,
-            axis,
-        );
-        arrow(
-            &painter,
-            to_screen(Complex::new(0.0, -1.0)),
-            to_screen(Complex::new(0.0, 1.0)),
-            head,
-            axis,
-        );
-
-        let (points, line_structure) = create_gridlines(
-            SEGMENT_RESOLUTION,
-            self.resolution,
-            self.x_min,
-            self.x_max,
-            self.y_min,
-            self.y_max,
-        );
-        let mut points = points.map(|z| {
-            let w = if self.apply_function {
-                z + (f(z, self.parameter) - z) * self.homotopy
-            } else {
-                z
-            };
-            to_screen(w)
-        });
-
-        let stroke = Stroke::new(1.5_f32, Color32::WHITE);
-        for line_len in line_structure {
-            // Split each line where it runs off to infinity (e.g. through a pole).
-            let mut segment = Vec::with_capacity(line_len);
-            for p in points.by_ref().take(line_len) {
-                if p.is_finite() && p.to_vec2().length() < MAX_SCREEN_COORD {
-                    segment.push(p);
-                } else if !segment.is_empty() {
-                    flush(&painter, &mut segment, stroke);
-                }
-            }
-            flush(&painter, &mut segment, stroke);
-        }
-    }
-
-    fn handle_scroll(&mut self, ctx: &egui::Context) {
-        let (events, keys) = ctx.input(|i| {
-            let held = |k| i.key_down(k);
-            (
-                i.events.clone(),
-                [held(Key::W), held(Key::A), held(Key::S), held(Key::D)],
-            )
-        });
-        let [w, a, s, d] = keys;
-
-        for event in events {
-            let egui::Event::MouseWheel {
-                unit,
-                delta,
-                modifiers,
-                ..
-            } = event
-            else {
-                continue;
-            };
-            let delta = match unit {
-                MouseWheelUnit::Point => delta,
-                MouseWheelUnit::Line => delta * POINTS_PER_LINE,
-                MouseWheelUnit::Page => delta * 20.0 * POINTS_PER_LINE,
-            };
-            // Some platforms turn shift+wheel into horizontal scrolling.
-            let dominant = if delta.y.abs() >= delta.x.abs() {
-                delta.y
-            } else {
-                delta.x
-            };
-            // Convert to plane units, with y pointing up.
-            let plane = vec2(delta.x, -delta.y) / self.pixels_per_unit;
-
-            if modifiers.shift {
-                self.pixels_per_unit =
-                    (self.pixels_per_unit * (dominant / 200.0).exp()).clamp(1.0, 20_000.0);
-            } else if modifiers.ctrl || modifiers.command {
-                self.resolution = (self.resolution - dominant / 50.0).clamp(0.0, 6.0);
-            } else if w || a || s || d {
-                if a {
-                    self.x_min += plane.x;
-                }
-                if d {
-                    self.x_max += plane.x;
-                }
-                if w {
-                    self.y_max += plane.y;
-                }
-                if s {
-                    self.y_min += plane.y;
-                }
-            } else {
-                self.position += plane;
-            }
-        }
-    }
-
-    fn to_screen(&self, rect: Rect, z: Complex<f32>) -> Pos2 {
-        let p = (vec2(z.re, z.im) + self.position) * self.pixels_per_unit;
-        rect.center() + vec2(p.x, -p.y)
+    match key {
+        KeyCode::Space => model.apply_function = !model.apply_function,
+        KeyCode::KeyR => model.parameter = Complex::new(1.0, 0.0),
+        _ => {}
     }
 }
 
-fn flush(painter: &egui::Painter, segment: &mut Vec<Pos2>, stroke: Stroke) {
-    if segment.len() >= 2 {
-        painter.line(std::mem::take(segment), stroke);
+fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
+    if app.egui_for_window(model.window).is_pointer_over_egui() {
+        return;
+    }
+    let delta = match wheel.unit {
+        MouseScrollUnit::Pixel => vec2(wheel.x, wheel.y),
+        MouseScrollUnit::Line => vec2(wheel.x, wheel.y) * POINTS_PER_LINE,
+    };
+    // Some platforms turn shift+wheel into horizontal scrolling.
+    let dominant = if delta.y.abs() >= delta.x.abs() {
+        delta.y
     } else {
-        segment.clear();
+        delta.x
+    };
+    // Positive y moves content down; the plane has y pointing up.
+    let plane = vec2(delta.x, -delta.y) / model.pixels_per_unit;
+
+    let keys = app.keys();
+    let any = |a, b| keys.pressed(a) || keys.pressed(b);
+    let (w, a, s, d) = (
+        keys.pressed(KeyCode::KeyW),
+        keys.pressed(KeyCode::KeyA),
+        keys.pressed(KeyCode::KeyS),
+        keys.pressed(KeyCode::KeyD),
+    );
+
+    if any(KeyCode::ShiftLeft, KeyCode::ShiftRight) {
+        let zoomed = model.pixels_per_unit * (dominant / 200.0).exp();
+        model.pixels_per_unit = zoomed.clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
+    } else if any(KeyCode::ControlLeft, KeyCode::ControlRight) {
+        model.resolution = (model.resolution - dominant / 50.0).clamp(0.0, MAX_RESOLUTION);
+    } else if w || a || s || d {
+        if a {
+            model.x_min += plane.x;
+        }
+        if d {
+            model.x_max += plane.x;
+        }
+        if w {
+            model.y_max += plane.y;
+        }
+        if s {
+            model.y_min += plane.y;
+        }
+    } else {
+        model.position += plane;
     }
 }
 
-fn arrow(
-    painter: &egui::Painter,
-    from: Pos2,
-    to: Pos2,
-    (length, width): (f32, f32),
-    stroke: Stroke,
-) {
-    painter.line_segment([from, to], stroke);
-    let dir = (to - from).normalized();
-    let normal = dir.rot90();
-    let base = to - dir * length;
-    painter.line_segment([to, base + normal * width], stroke);
-    painter.line_segment([to, base - normal * width], stroke);
+fn to_screen(model: &Model, z: Complex<f32>) -> Vec2 {
+    (vec2(z.re, z.im) + model.position) * model.pixels_per_unit
+}
+
+fn view(app: &App, model: &Model) {
+    let draw = app.draw();
+    draw.background().srgb(0.02, 0.02, 0.02);
+
+    // Coordinate axes from -1 to 1.
+    let ppu = model.pixels_per_unit;
+    for (start, end) in [((-1.0, 0.0), (1.0, 0.0)), ((0.0, -1.0), (0.0, 1.0))] {
+        draw.arrow()
+            .weight(1.0)
+            .head_length(0.1 * ppu)
+            .head_width(0.05 * ppu)
+            .color(GRAY)
+            .start(to_screen(model, Complex::new(start.0, start.1)))
+            .end(to_screen(model, Complex::new(end.0, end.1)));
+    }
+
+    let (points, line_structure) = create_gridlines(
+        SEGMENT_RESOLUTION,
+        model.resolution,
+        model.x_min,
+        model.x_max,
+        model.y_min,
+        model.y_max,
+    );
+    let mut points = points.map(|z| {
+        let w = if model.apply_function {
+            z + (f(z, model.parameter) - z) * model.homotopy
+        } else {
+            z
+        };
+        to_screen(model, w)
+    });
+
+    let polyline = |segment: &mut Vec<Vec2>| {
+        if segment.len() >= 2 {
+            draw.polyline()
+                .weight(1.5)
+                .color(WHITE)
+                .points(std::mem::take(segment));
+        } else {
+            segment.clear();
+        }
+    };
+    for line_len in line_structure {
+        // Split each line where it runs off to infinity (e.g. through a pole).
+        let mut segment = Vec::with_capacity(line_len);
+        for p in points.by_ref().take(line_len) {
+            if p.is_finite() && p.length() < MAX_SCREEN_COORD {
+                segment.push(p);
+            } else {
+                polyline(&mut segment);
+            }
+        }
+        polyline(&mut segment);
+    }
 }
 
 /// A square pad for dragging a complex value within `[-range, range]²`.
 fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) {
     let size = ui.available_width().min(200.0);
-    let (response, painter) = ui.allocate_painter(Vec2::splat(size), Sense::click_and_drag());
+    let (response, painter) =
+        ui.allocate_painter(egui::Vec2::splat(size), egui::Sense::click_and_drag());
     let rect = response.rect;
     let visuals = ui.style().interact(&response);
 
@@ -314,18 +291,17 @@ fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) {
     }
 
     painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
-    let faint = Stroke::new(1.0_f32, ui.visuals().weak_text_color());
+    let faint = egui::Stroke::new(1.0_f32, ui.visuals().weak_text_color());
     painter.line_segment([rect.center_top(), rect.center_bottom()], faint);
     painter.line_segment([rect.left_center(), rect.right_center()], faint);
 
-    let t = vec2(
+    let t = egui::vec2(
         egui::remap_clamp(value.re, -range..=range, 0.0..=1.0),
         egui::remap_clamp(value.im, range..=-range, 0.0..=1.0),
     );
-    let knob = rect.min + t * rect.size();
-    painter.circle_filled(knob, 6.0, visuals.fg_stroke.color);
+    painter.circle_filled(rect.min + t * rect.size(), 6.0, visuals.fg_stroke.color);
     painter.text(
-        rect.left_top() + vec2(4.0, 4.0),
+        rect.left_top() + egui::vec2(4.0, 4.0),
         egui::Align2::LEFT_TOP,
         format!("{:.2} {:+.2}i", value.re, value.im),
         egui::FontId::monospace(11.0),

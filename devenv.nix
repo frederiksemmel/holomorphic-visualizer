@@ -1,7 +1,7 @@
 { pkgs, lib, config, ... }:
 
 let
-  # eframe/wgpu dlopen() these at runtime (Vulkan/GL, Wayland, X11, keyboard).
+  # Bevy/wgpu dlopen() these at runtime (Vulkan/GL, Wayland, X11, keyboard, fonts).
   runtimeLibs = with pkgs; [
     libGL
     libxkbcommon
@@ -23,7 +23,18 @@ let
     ];
   };
 
-  unwrapped = config.languages.rust.import src { };
+  unwrapped = config.languages.rust.import src {
+    crateOverrides = pkgs.defaultCrateOverrides // {
+      # Bevy's text stack (fontique) links fontconfig; nixpkgs has no override for it yet.
+      yeslogic-fontconfig-sys = _: {
+        nativeBuildInputs = [ pkgs.pkg-config ];
+        buildInputs = [ pkgs.fontconfig ];
+      };
+      # Their build scripts unwrap CARGO_ENCODED_RUSTFLAGS, which only cargo sets.
+      av-scenechange = _: { CARGO_ENCODED_RUSTFLAGS = ""; };
+      rav1e = _: { CARGO_ENCODED_RUSTFLAGS = ""; };
+    };
+  };
 
   conformal-visualizer = pkgs.symlinkJoin {
     name = "conformal-visualizer-${unwrapped.version}";
@@ -39,7 +50,11 @@ in
 {
   languages.rust.enable = true;
 
-  packages = [ pkgs.cargo-edit ];
+  packages = with pkgs; [
+    cargo-edit
+    pkg-config
+    fontconfig.dev
+  ];
 
   env.LD_LIBRARY_PATH = lib.makeLibraryPath runtimeLibs;
 
