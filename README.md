@@ -14,37 +14,51 @@ a Mickey Mouse function, as every Möbius Transformation contains a Mickey Mouse
 
 ![mickey_mouse](/examples/mickey_mouse.png)
 
-## Installation
+## Development
 
-On Linux and macOS:
-* Install the rust toolchain in order to have cargo installed by following
-  [this](https://www.rust-lang.org/tools/install) guide.
+The dev environment is managed with [devenv](https://devenv.sh); enter it with
+`devenv shell`. It provides the Rust toolchain and the runtime libraries (Vulkan/GL, Wayland, X11)
+the window needs.
 
-On Windows you are on your own...
+```sh
+cargo run --release   # run the visualizer
+cargo test            # unit tests (also: `devenv test`)
+cargo bench           # criterion benchmarks for grid generation
+```
+
+Inside the shell, cargo is limited to 90% of the CPU cores (`CARGO_BUILD_JOBS`).
+
+### Nix package
+
+The app is also exposed as a devenv output (built with crate2nix):
+
+```sh
+devenv build outputs.conformal-visualizer      # build locally
+build-remote                                   # same, but only on remote builders (nixbuild.net)
+```
+
+Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
 
 ## Usage
-* You need to change the function to visualize in the source code, as parsing a function is not implemented. This is done in `src/main.rs` at the bottom in the part:
+* The function to visualize is set in the source code, since there is no
+  function parser. Change `f` at the top of `src/main.rs` (and
+  `FUNCTION_LABEL` next to it):
   ```rust
-    let points = points.map(|z| {
-        if model.apply_function {
-            // change this to visualize a different function
-            z.exp()
-        } else {
-            z
-        }
-    });
+  fn f(z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+      (1.0 - z) / (1.0 + z) * p
+  }
   ```
-  You can check out the [docs](https://docs.rs/num/0.4.0/num/complex/struct.Complex.html) for num::complex to see what functions you can build.
-* Run `cargo run --release` inside the project directory. You have to use
-  the `--release` flag because otherwise you get a memory overflow if you
-  increase the resolution too much.
-* The controls on a touchpad are:
-    * `scroll` to move
+  `p` is the parameter set with the XY pad. See the
+  [num-complex docs](https://docs.rs/num-complex/latest/num_complex/struct.Complex.html)
+  for the functions you can use.
+* Controls:
+    * `scroll` or drag to move
     * `shift + scroll` to zoom
-    * `ctrl + scroll` increas the grid resolution 
-    * `[w|a|s|d] + scroll` to make the grid bigger along these sides.
-      Can be pressed at the same time
+    * `ctrl + scroll` to change the grid resolution
+    * `[w|a|s|d] + scroll` to move that edge of the grid. You can hold
+      more than one at once
     * `space` to toggle applying the function
     * `r` to reset the parameter to 1
-    * use the parameter control on the left with your mouse to control the parameter
+    * the side panel has sliders for everything, an XY pad for the parameter,
+      and a homotopy slider that blends from the identity (0) to `f` (1)
 
