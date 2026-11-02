@@ -34,39 +34,9 @@ struct GridParams {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: GridParams;
 
-// ---------------------------------------------------------------------------
-// Complex numbers as vec2(re, im). Add and subtract with + and -.
-
-const ONE = vec2<f32>(1.0, 0.0);
-const I = vec2<f32>(0.0, 1.0);
-
-fn cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
-    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
-fn cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
-    return vec2(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / dot(b, b);
-}
-fn cexp(z: vec2<f32>) -> vec2<f32> {
-    return exp(z.x) * vec2(cos(z.y), sin(z.y));
-}
-fn clog(z: vec2<f32>) -> vec2<f32> {
-    return vec2(log(length(z)), atan2(z.y, z.x));
-}
-fn cpow(z: vec2<f32>, w: vec2<f32>) -> vec2<f32> {
-    return cexp(cmul(w, clog(z)));
-}
-fn csin(z: vec2<f32>) -> vec2<f32> {
-    return vec2(sin(z.x) * cosh(z.y), cos(z.x) * sinh(z.y));
-}
-fn ccos(z: vec2<f32>) -> vec2<f32> {
-    return vec2(cos(z.x) * cosh(z.y), -sin(z.x) * sinh(z.y));
-}
-
-// The function being visualized. Change this to look at a different map, and
-// update FUNCTION_LABEL in src/main.rs to match.
-fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
-    return cmul(cdiv(ONE - z, ONE + z), p);
-}
+// `f(z, p)`, the function being visualized, and the complex helpers it uses
+// (`cmul`, `cexp`, ...) are appended at runtime: see src/complex.wgsl and
+// `grid_shader` in src/main.rs.
 
 // ---------------------------------------------------------------------------
 
