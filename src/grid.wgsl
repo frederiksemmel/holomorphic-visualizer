@@ -24,6 +24,12 @@ struct GridParams {
     coloring: u32,
     // Stretch factors beyond 2^±stretch_octaves get the extreme color.
     stretch_octaves: f32,
+    // The whole grid domain, for Source coloring. The laid-out grid
+    // (grid_min/grid_max) can be just the visible part of it.
+    domain_min: vec2<f32>,
+    domain_max: vec2<f32>,
+    // Half the window size, in screen points. The origin is the window centre.
+    half_view: vec2<f32>,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: GridParams;
@@ -150,8 +156,8 @@ fn source(horizontal: bool, s: f32) -> vec3<f32> {
 fn line_color(z: vec2<f32>, horizontal: bool, df: vec2<f32>) -> vec3<f32> {
     switch params.coloring {
         case COLORING_SOURCE: {
-            let size = max(params.grid_max - params.grid_min, vec2(1e-6));
-            let s = clamp((z - params.grid_min) / size, vec2(0.0), vec2(1.0));
+            let size = max(params.domain_max - params.domain_min, vec2(1e-6));
+            let s = clamp((z - params.domain_min) / size, vec2(0.0), vec2(1.0));
             return source(horizontal, select(s.x, s.y, horizontal));
         }
         case COLORING_PHASE: {
@@ -199,13 +205,28 @@ fn vertex(
     let seg = segment(instance_index);
     let a = to_screen(g(seg.start));
     let b = to_screen(g(seg.end));
+
+    // Drop segments outside the window before the costly part below (4 more
+    // evaluations of f). The quad is the straight chord from a to b, widened
+    // by the line width, so its bounding box decides exactly. NaN ends fail
+    // the comparisons and are dropped too. Far-off ends count as infinity even
+    // if the chord crosses the window, as before.
+    let reach = 0.5 * params.line_width;
+    let in_view = all(max(a, b) > -params.half_view - reach)
+        && all(min(a, b) < params.half_view + reach);
+    let finite = all(abs(a) < vec2(MAX_SCREEN_COORD)) && all(abs(b) < vec2(MAX_SCREEN_COORD));
+    if !(in_view && finite) {
+        out.position = CULLED;
+        return out;
+    }
+
     let df_start = f_prime(seg.start);
     let df_end = f_prime(seg.end);
     let z = select(seg.start, seg.end, at_end);
     let df = select(df_start, df_end, at_end);
 
-    // Drop segments that are not finite, far off screen, or that jump across a
-    // pole instead of following the curve. Across a pole the image runs off to
+    // Drop segments that jump across a pole instead of following the curve.
+    // Across a pole the image runs off to
     // infinity and back in from the other side, so the chord points against
     // the curve's direction at the ends, and is often much longer than the
     // derivative predicts. Both ends are checked, never the midpoint: a
@@ -223,8 +244,7 @@ fn vertex(
     // jumping anywhere; keep those so no gap opens there.
     let follows_curve = (forward || chord < 4.0 * params.line_width)
         && chord < 4.0 * expected + params.line_width;
-    let on_screen = all(abs(a) < vec2(MAX_SCREEN_COORD)) && all(abs(b) < vec2(MAX_SCREEN_COORD));
-    if !(on_screen && follows_curve) {
+    if !follows_curve {
         out.position = CULLED;
         return out;
     }
