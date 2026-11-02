@@ -33,7 +33,17 @@ so that one turn around the centre zooms in by 256. His picture contains a copy
 of itself shrunk by 22.58 and turned by 157.6°, so it zooms in forever while
 circling the origin. The grid here is the straight picture in log coordinates,
 w = exp(z): vertical lines are circles around its centre, horizontal lines are
-rays. The map draws them the way Escher curled them:
+rays. The map draws them the way Escher curled them.
+
+The example zooms by e⁶ ≈ 403 per turn instead of 256:
+
+$$f(z) = \exp\left(\frac{2\pi i\, z}{2\pi i + \log(p\, e^6)}\right), \qquad p = 1.$$
+
+f repeats itself after z moves by 2πi + log(p e⁶), so a circle that leaves one
+turn comes back log(p e⁶) further in. With p = 1 that is exactly 6, a whole
+number of grid spacings at every resolution, so each circle meets up with
+another one. Escher's 256 is p = 256/e⁶ ≈ 0.635, where log 256 ≈ 5.545 and
+the circles miss each other.
 
 ![Escher's Print Gallery map](examples/escher.png)
 

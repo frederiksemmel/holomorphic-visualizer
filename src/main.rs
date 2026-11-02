@@ -69,13 +69,15 @@ const EXAMPLES: [Example; 6] = [
     },
     Example {
         name: "Escher",
-        formula: "p * exp(2pi i z / (2pi i + log(256)))",
+        formula: "exp(2pi i z / (2pi i + log(p * e^6)))",
         about: "M. C. Escher's Print Gallery (1956). This is exp(z)^(1/α) with \
-                α = (2πi + log 256) / 2πi ≈ 1 − 0.8825i. The straight picture behind \
-                the print contains itself, scaled down by 256. Escher's map w ↦ w^(1/α) \
-                curls it so that one turn around the centre zooms by 256: his picture \
-                contains a copy of itself shrunk by 22.58 and turned by 157.6°, so it \
-                zooms in forever while circling the origin. The grid is the straight \
+                α = (2πi + log(p e⁶)) / 2πi: the straight picture behind the print \
+                contains itself, scaled down by p e⁶, and w ↦ w^(1/α) curls it so that \
+                one turn around the centre zooms by that much. Escher used 256 \
+                (p = 256/e⁶ ≈ 0.635); his picture contains a copy of itself shrunk by \
+                22.58 and turned by 157.6°. With p = 1 a turn zooms by e⁶ ≈ 403, and \
+                log(e⁶) = 6 is a whole number of grid spacings, so after each turn \
+                every circle meets up with another one. The grid is the straight \
                 picture in log coordinates, w = exp(z): vertical lines are circles \
                 around its centre, horizontal lines are rays.",
         links: &[
