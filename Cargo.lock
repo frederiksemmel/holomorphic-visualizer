@@ -2144,7 +2144,7 @@ dependencies = [
 name = "conformal-visualizer"
 version = "0.2.0"
 dependencies = [
- "bevy_input",
+ "bevy",
  "criterion",
  "nannou",
  "num",
