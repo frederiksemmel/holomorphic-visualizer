@@ -1,5 +1,10 @@
 use num::complex::Complex;
 
+pub mod expr;
+
+/// Complex arithmetic for the grid shader, used by the `f` that [`expr`] generates.
+pub const COMPLEX_WGSL: &str = include_str!("complex.wgsl");
+
 /// Highest grid refinement level; `2^MAX_RESOLUTION` lines per unit.
 pub const MAX_RESOLUTION: f32 = 7.0;
 

@@ -8,7 +8,8 @@ Built with [nannou](https://nannou.cc) 0.20 (on Bevy) and its egui integration.
 ## Examples
 
 Pick one from the **Example** menu in the control window, or press `e` to step
-through them. Each brings its own grid and parameter. The screenshots use the
+through them. Each brings its own grid and parameter, and fills in its formula,
+which you can then edit (see [Usage](#usage)). The screenshots use the
 Source coloring (`2`): horizontal lines warm, vertical lines cool.
 
 The basic one is a Möbius transformation, p · (1 − z)/(1 + z), applied to the
@@ -88,23 +89,25 @@ build-remote                                   # same, but only on remote builde
 Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
 
 ## Usage
-* The grid is mapped on the GPU: `src/grid.wgsl` evaluates the function for
-  every point, so the grid can be dense. There is no function parser. To add a
-  function, add a case to `f` in that shader and an entry at the same index to
-  `EXAMPLES` at the top of `src/main.rs` (name, formula, grid, parameter):
-  ```wgsl
-  fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
-      switch params.example {
-          case 1u: {
-              return cexp(cmul(p, z));
-          }
-          // ...
-      }
-  }
-  ```
-  Complex numbers are `vec2(re, im)`. Add and subtract with `+` and `-`; the
-  shader provides `cmul`, `cdiv`, `cexp`, `clog`, `cpow`, `csin`, `ccos` and the
-  constants `ONE` and `I`. `p` is the parameter set with the XY pad.
+* Type any function into the `f(z) =` field, for example `z^2 + p`,
+  `p sin(z) / z` or `exp(1/z)`. The picture follows as you type; while a
+  formula has an error, the message says where and the last working one stays
+  on screen. `Esc` goes back to the example.
+    * `z` is the point, `p` the parameter set with the XY pad, plus `i`, `pi`
+      (or `π`) and `e`.
+    * `+ - * / ^` with the usual precedence; `^` binds tightest, to the right.
+      Writing things next to each other multiplies: `2pi i z`, `p sin(z)`.
+    * Functions, with parentheses: `exp`, `log` (or `ln`), `sqrt`, `sin`,
+      `cos`, `tan`, `sinh`, `cosh`, `tanh`. `log`, `sqrt` and non-integer
+      powers use the principal branch, cut along the negative real axis.
+      Integer powers like `z^3` or `z^-2` are multiplied out and have no cut.
+* Dynamic function eval: the grid is mapped on the GPU, so the formula is
+  never evaluated on the CPU. `src/expr.rs` parses it and translates it into
+  WGSL (`p sin(z)` becomes `cmul(p, csin(z))`), and the app rebuilds the grid
+  shader from `src/grid.wgsl`, the complex helpers in `src/complex.wgsl` and
+  the generated `f`, which Bevy recompiles. Only formulas that parse are sent
+  to the GPU, and the tests compile the code generated for a range of formulas
+  with naga.
 * Color modes (`c` cycles them, `1`–`5` pick one):
     * **White**: plain lines.
     * **Source**: horizontal lines warm, vertical lines cool, shaded by

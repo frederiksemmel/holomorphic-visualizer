@@ -24,70 +24,13 @@ struct GridParams {
     coloring: u32,
     // Stretch factors beyond 2^±stretch_octaves get the extreme color.
     stretch_octaves: f32,
-    // Which case of `f` to draw.
-    example: u32,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: GridParams;
 
-// ---------------------------------------------------------------------------
-// Complex numbers as vec2(re, im). Add and subtract with + and -.
-
-const ONE = vec2<f32>(1.0, 0.0);
-const I = vec2<f32>(0.0, 1.0);
-
-fn cmul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
-    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
-fn cdiv(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
-    return vec2(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / dot(b, b);
-}
-fn cexp(z: vec2<f32>) -> vec2<f32> {
-    return exp(z.x) * vec2(cos(z.y), sin(z.y));
-}
-fn clog(z: vec2<f32>) -> vec2<f32> {
-    return vec2(log(length(z)), atan2(z.y, z.x));
-}
-fn cpow(z: vec2<f32>, w: vec2<f32>) -> vec2<f32> {
-    return cexp(cmul(w, clog(z)));
-}
-fn csin(z: vec2<f32>) -> vec2<f32> {
-    return vec2(sin(z.x) * cosh(z.y), cos(z.x) * sinh(z.y));
-}
-fn ccos(z: vec2<f32>) -> vec2<f32> {
-    return vec2(cos(z.x) * cosh(z.y), -sin(z.x) * sinh(z.y));
-}
-
-// log 256: Escher's Print Gallery repeats itself, straightened out, when scaled by 256.
-const LOG_256: f32 = 5.54517744448;
-
-// The functions being visualized, picked by `params.example`. Case i is
-// `EXAMPLES[i]` in src/main.rs; add a case there and here to add a function.
-fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
-    switch params.example {
-        case 1u: {
-            return cexp(cmul(p, z));
-        }
-        case 2u: {
-            return cpow(z, p);
-        }
-        case 3u: {
-            return cmul(p, csin(z));
-        }
-        case 4u: {
-            return z + cdiv(p, z);
-        }
-        case 5u: {
-            // Escher's map w ↦ w^(1/α) with α = (2πi + log 256) / 2πi (see de Smit
-            // and Lenstra), applied to w = exp(z): z is a log coordinate.
-            let inverse_alpha = cdiv(vec2(0.0, TAU), vec2(LOG_256, TAU));
-            return cmul(p, cexp(cmul(z, inverse_alpha)));
-        }
-        default: {
-            return cmul(cdiv(ONE - z, ONE + z), p);
-        }
-    }
-}
+// `f(z, p)`, the function being visualized, and the complex helpers it uses
+// (`cmul`, `cexp`, ...) are appended at runtime: see src/complex.wgsl and
+// `set_grid_shader` in src/main.rs.
 
 // ---------------------------------------------------------------------------
 
