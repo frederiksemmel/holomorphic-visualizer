@@ -79,6 +79,10 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
     * hold `w` / `a` / `s` / `d` and scroll or move the mouse to drag the top /
       left / bottom / right edge of the grid. Hold two opposite ones (`a + d`,
       `w + s`) to slide the grid along, all four to move it
+    * on a laptop touchpad, holding a letter key may switch the touchpad off
+      (libinput's disable-while-typing). Press `ctrl` first, then the key:
+      `ctrl + a + scroll` works the same, and the touchpad stays on. This goes
+      for `p` and `f` below too
     * hold `p` and scroll or move the mouse, or right-drag the canvas, to move
       the parameter `p`; `r` resets it
     * hold `f` and scroll or move the mouse to blend from the identity to `f`
