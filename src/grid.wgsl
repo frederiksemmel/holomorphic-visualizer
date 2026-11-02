@@ -37,10 +37,16 @@ fn g(z: vec2<f32>) -> vec2<f32> {
     return z + params.blend * (f(z, params.parameter) - z);
 }
 
-// g'(z) by central differences. g is holomorphic, so any direction works.
-fn g_prime(z: vec2<f32>) -> vec2<f32> {
+// f'(z) by central differences. f is holomorphic, so any direction works.
+fn f_prime(z: vec2<f32>) -> vec2<f32> {
     let h = 1e-3 * max(1.0, length(z));
-    return (g(z + vec2(h, 0.0)) - g(z - vec2(h, 0.0))) / (2.0 * h);
+    let p = params.parameter;
+    return (f(z + vec2(h, 0.0), p) - f(z - vec2(h, 0.0), p)) / (2.0 * h);
+}
+
+// g'(z) from f'(z): g blends linearly, so its derivative does too.
+fn g_prime(df: vec2<f32>) -> vec2<f32> {
+    return ONE + params.blend * (df - ONE);
 }
 
 // Endpoints of segment i; mirrors `GridLayout::segment` in src/lib.rs.
@@ -109,7 +115,9 @@ fn source(horizontal: bool, s: f32) -> vec3<f32> {
     return mix(vec3(0.2, 0.8, 1.0), vec3(0.7, 0.4, 1.0), s);
 }
 
-fn line_color(z: vec2<f32>, horizontal: bool, dg: vec2<f32>) -> vec3<f32> {
+// `df` is f'(z), not the blended g'(z), so Stretch and Rotation keep showing
+// f while peeking at the source grid, like Phase does.
+fn line_color(z: vec2<f32>, horizontal: bool, df: vec2<f32>) -> vec3<f32> {
     switch params.coloring {
         case COLORING_SOURCE: {
             let size = max(params.grid_max - params.grid_min, vec2(1e-6));
@@ -120,10 +128,10 @@ fn line_color(z: vec2<f32>, horizontal: bool, dg: vec2<f32>) -> vec3<f32> {
             return cyclic(atan2(z.y, z.x) / TAU);
         }
         case COLORING_STRETCH: {
-            return diverging(clamp(log2(length(dg)) / STRETCH_OCTAVES, -1.0, 1.0));
+            return diverging(clamp(log2(length(df)) / STRETCH_OCTAVES, -1.0, 1.0));
         }
         case COLORING_ROTATION: {
-            return cyclic(atan2(dg.y, dg.x) / TAU);
+            return cyclic(atan2(df.y, df.x) / TAU);
         }
         default: {
             return vec3(1.0);
@@ -161,17 +169,32 @@ fn vertex(
     let seg = segment(instance_index);
     let a = to_screen(g(seg.start));
     let b = to_screen(g(seg.end));
+    let df_start = f_prime(seg.start);
+    let df_end = f_prime(seg.end);
     let z = select(seg.start, seg.end, at_end);
-    let dg = g_prime(z);
+    let df = select(df_start, df_end, at_end);
 
-    // Drop segments that are not finite, far off screen, or much longer than
-    // the derivative predicts: those jump across a pole instead of following
-    // the curve.
-    let chord = length(b - a);
-    let expected = length(g_prime(0.5 * (seg.start + seg.end))) * length(seg.end - seg.start)
-        * params.pixels_per_unit;
+    // Drop segments that are not finite, far off screen, or that jump across a
+    // pole instead of following the curve. Across a pole the image runs off to
+    // infinity and back in from the other side, so the chord points against
+    // the curve's direction at the ends, and is often much longer than the
+    // derivative predicts. Both ends are checked, never the midpoint: a
+    // midpoint near the pole has a huge derivative that excuses any chord.
+    // Every corner of the quad must reach the same verdict, so this uses only
+    // per-segment values.
+    let step = (seg.end - seg.start) * params.pixels_per_unit;
+    let tangent_start = cmul(g_prime(df_start), step);
+    let tangent_end = cmul(g_prime(df_end), step);
+    let chord_vec = b - a;
+    let chord = length(chord_vec);
+    let expected = max(length(tangent_start), length(tangent_end));
+    let forward = dot(chord_vec, tangent_start) >= 0.0 && dot(chord_vec, tangent_end) >= 0.0;
+    // Tiny chords can point backwards at a critical point (f' = 0) without
+    // jumping anywhere; keep those so no gap opens there.
+    let follows_curve = (forward || chord < 4.0 * params.line_width)
+        && chord < 4.0 * expected + params.line_width;
     let on_screen = all(abs(a) < vec2(MAX_SCREEN_COORD)) && all(abs(b) < vec2(MAX_SCREEN_COORD));
-    if !(on_screen && chord < 4.0 * expected + params.line_width) {
+    if !(on_screen && follows_curve) {
         out.position = CULLED;
         return out;
     }
@@ -184,7 +207,7 @@ fn vertex(
         + 0.5 * params.line_width * (side * normal + along * dir);
 
     out.position = view.clip_from_world * vec4(pos, 0.0, 1.0);
-    out.color = vec4(pow(line_color(z, seg.horizontal, dg), vec3(2.2)), 1.0);
+    out.color = vec4(pow(line_color(z, seg.horizontal, df), vec3(2.2)), 1.0);
     return out;
 }
 
