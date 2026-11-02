@@ -1,5 +1,8 @@
 # Conformal Map Visualizer
 
+**Try it in your browser: <https://frederiksemmel.github.io/holomorphic-visualizer/>**
+(needs WebGPU: Chrome or Edge, Safari 26+, or Firefox 141+ on Windows).
+
 Built with [nannou](https://nannou.cc) 0.20 (on Bevy) and its egui integration.
 
 ## Examples
@@ -59,10 +62,20 @@ The first build compiles Bevy (~590 crates), so expect a few minutes.
 ```sh
 cargo run --release   # run the visualizer
 cargo test            # unit tests (also: `devenv test`)
-cargo bench           # criterion benchmarks for grid generation
 ```
 
 Inside the shell, cargo is limited to 90% of the CPU cores (`CARGO_BUILD_JOBS`).
+
+### Web
+
+```sh
+build-web    # build the browser version into web/dist
+serve-web    # build it and serve it on http://127.0.0.1:8080
+```
+
+CI (`.github/workflows/web.yml`) builds it for every pull request and publishes
+it to GitHub Pages from `master`. nannou is vendored in `vendor/nannou` with
+fixes for the web build; see the note in `Cargo.toml`.
 
 ### Nix package
 

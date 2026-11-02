@@ -1,5 +1,5 @@
 use bevy::asset::{Assets, uuid_handle};
-use bevy::input::{ButtonInput, mouse::MouseScrollUnit};
+use bevy::input::{ButtonInput, mouse::MouseScrollUnit, touch::TouchPhase};
 use conformal_visualizer::expr::{self, ParseError};
 use conformal_visualizer::{COMPLEX_WGSL, GridLayout};
 use nannou::prelude::render::ShaderModel;
@@ -95,7 +95,11 @@ const EXAMPLES: [Example; 6] = [
 
 /// Points per scroll "line" for mice that report wheel clicks instead of pixels.
 const POINTS_PER_LINE: f32 = 24.0;
-const MAX_RESOLUTION: f32 = 6.0;
+/// Finest grid the controls offer; below the library's hard cap
+/// (`conformal_visualizer::MAX_RESOLUTION`) to keep the line count sane.
+const MAX_UI_RESOLUTION: f32 = 6.0;
+/// The grid edges stay within `[-DOMAIN_LIMIT, DOMAIN_LIMIT]`.
+const DOMAIN_LIMIT: f32 = 15.0;
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=20_000.0;
 const DEFAULT_PIXELS_PER_UNIT: f32 = 150.0;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range.
@@ -106,7 +110,8 @@ const MAX_DENSITY: f32 = 2048.0;
 const MAX_SEGMENTS: u32 = 1_000_000;
 /// In screen points.
 const LINE_WIDTH: f32 = 1.5;
-/// Matches `STRETCH_OCTAVES` in `src/grid.wgsl`.
+/// Stretch factors beyond 2^±STRETCH_OCTAVES get the extreme color. Sent to
+/// `src/grid.wgsl` in `GridParams`, so the legend and the shader agree.
 const STRETCH_OCTAVES: f32 = 2.0;
 
 const GRID_SHADER: Handle<Shader> = uuid_handle!("b69f3f88-de67-4239-b652-1b805606f44f");
@@ -174,6 +179,7 @@ struct GridParams {
     blend: f32,
     line_width: f32,
     coloring: u32,
+    stretch_octaves: f32,
 }
 
 /// How grid lines are colored. The discriminants are the `COLORING_*`
@@ -249,7 +255,10 @@ struct Model {
     peek: bool,
     /// Cursor position at the last update, for key + mouse-move gestures.
     last_mouse: Vec2,
-    fps: f64,
+    /// Fingers on the canvas (by touch id) and where they were last seen.
+    touches: Vec<(u64, Vec2)>,
+    /// Screen area of the control window, in points from the top left.
+    panel: egui::Rect,
 }
 
 impl Model {
@@ -324,7 +333,7 @@ impl Model {
             (KeyCode::KeyS, &mut self.y_min, delta.y),
         ] {
             if keys.pressed(key) {
-                *edge += step;
+                *edge = (*edge + step).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
                 held = true;
             }
         }
@@ -336,11 +345,15 @@ fn model(app: &App) -> Model {
     let window = app
         .new_window()
         .primary()
-        .title("Conformal Map Visualizer")
-        .size(1200, 800)
+        .title("Conformal Map Visualizer");
+    // On the web the page's CSS sizes the canvas to the viewport.
+    #[cfg(not(target_arch = "wasm32"))]
+    let window = window.size(1200, 800);
+    let window = window
         .view(view)
         .key_pressed(key_pressed)
         .mouse_wheel(mouse_wheel)
+        .touch(touch)
         .build();
     // Only redraw on input; the picture is static otherwise.
     app.set_update_mode(UpdateMode::wait());
@@ -369,18 +382,25 @@ fn model(app: &App) -> Model {
         peek_button: false,
         peek: false,
         last_mouse: Vec2::ZERO,
-        fps: 0.0,
+        touches: Vec::new(),
+        panel: egui::Rect::NOTHING,
     }
 }
 
 fn update(app: &App, model: &mut Model) {
     let ctx = app.egui_for_window(model.window);
-    model.fps = app.fps();
 
-    egui::Window::new("Conformal Map")
+    // Phones get the canvas first; the panel opens from its title bar.
+    let wide = ctx.content_rect().width() > 700.0;
+    let panel = egui::Window::new("Conformal Map")
         .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
         .resizable(false)
+        .default_open(wide)
+        .vscroll(true)
         .show(&ctx, |ui| controls(ui, model));
+    if let Some(panel) = panel {
+        model.panel = panel.response.rect;
+    }
     if let Some(body) = model.new_function.take() {
         app.command_scope(|mut commands| {
             commands.queue(move |world: &mut World| set_grid_shader(world, &body));
@@ -388,7 +408,7 @@ fn update(app: &App, model: &mut Model) {
     }
 
     let keys = app.keys();
-    let typing = ctx.egui_wants_keyboard_input();
+    let typing = ctx.text_edit_focused();
     let over_ui = ctx.is_pointer_over_egui();
     model.peek = model.peek_button || (!typing && keys.pressed(KeyCode::KeyX));
 
@@ -396,7 +416,7 @@ fn update(app: &App, model: &mut Model) {
     let moved = mouse - model.last_mouse;
     model.last_mouse = mouse;
     if !typing && !over_ui && model.drag.is_none() && moved != Vec2::ZERO {
-        key_gesture(model, &keys, moved);
+        key_gesture(model, &keys, moved, moved);
     }
     mouse_drag(app, model, over_ui);
 }
@@ -427,10 +447,17 @@ fn mouse_drag(app: &App, model: &mut Model, over_ui: bool) {
 
 /// Hold a key and scroll or move the mouse: W/A/S/D move grid edges (two
 /// opposite ones slide the grid), P moves the parameter, F blends the homotopy.
-/// `delta` is in screen points with y up. Returns whether a key was held.
-fn key_gesture(model: &mut Model, keys: &ButtonInput<KeyCode>, delta: Vec2) -> bool {
+/// `delta` is in screen points with y up; `edge_delta` is the same motion as
+/// the edges should take it (see [`along_held_edges`]). Returns whether a key
+/// was held.
+fn key_gesture(
+    model: &mut Model,
+    keys: &ButtonInput<KeyCode>,
+    delta: Vec2,
+    edge_delta: Vec2,
+) -> bool {
     let plane = delta / model.pixels_per_unit;
-    let mut used = model.move_edges(keys, plane);
+    let mut used = model.move_edges(keys, edge_delta / model.pixels_per_unit);
     if keys.pressed(KeyCode::KeyP) {
         model.parameter += Complex::new(plane.x, plane.y);
         used = true;
@@ -525,7 +552,7 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "pan: drag or scroll · reset view: H");
 
     ui.separator();
-    ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_RESOLUTION).text("Resolution"));
+    ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_UI_RESOLUTION).text("Resolution"));
     hint(ui, "finer / coarser: ctrl + scroll");
     ui.label("Grid domain");
     for (value, label) in [
@@ -534,7 +561,7 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
         (&mut model.y_min, "y min"),
         (&mut model.y_max, "y max"),
     ] {
-        ui.add(egui::Slider::new(value, -15.0..=15.0).text(label));
+        ui.add(egui::Slider::new(value, -DOMAIN_LIMIT..=DOMAIN_LIMIT).text(label));
     }
     hint(ui, "hold W / A / S / D (top / left / bottom / right edge)");
     hint(ui, "+ scroll or move the mouse to drag that edge;");
@@ -575,12 +602,12 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "hold P + scroll or move the mouse");
 
     ui.separator();
+    // No fps readout: the app only redraws on input, so it would count events.
     hint(
         ui,
         &format!(
-            "{} segments mapped on the GPU · {:.0} fps",
-            model.grid_layout().segment_count(),
-            model.fps
+            "{} segments mapped on the GPU",
+            model.grid_layout().segment_count()
         ),
     );
 }
@@ -672,7 +699,7 @@ fn source(horizontal: bool, s: f32) -> [f32; 3] {
 fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
     if app
         .egui_for_window(model.window)
-        .egui_wants_keyboard_input()
+        .text_edit_focused()
     {
         return;
     }
@@ -697,9 +724,57 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
     }
 }
 
+/// One finger pans, two fingers pinch to zoom. Touches that start on the
+/// control window are left to egui.
+fn touch(app: &App, model: &mut Model, touch: TouchInput) {
+    // Touch positions start at the top left with y down; the canvas is
+    // centred with y up.
+    let size = app.main_window().size_points();
+    let pos = vec2(
+        touch.position.x - size.x / 2.0,
+        size.y / 2.0 - touch.position.y,
+    );
+    let ctx = app.egui_for_window(model.window);
+    let on_panel = model
+        .panel
+        .contains(egui::pos2(touch.position.x, touch.position.y));
+    let index = model.touches.iter().position(|&(id, _)| id == touch.id);
+    match (touch.phase, index) {
+        (TouchPhase::Started, None) => {
+            if !on_panel && !ctx.egui_wants_pointer_input() {
+                model.touches.push((touch.id, pos));
+            }
+        }
+        (TouchPhase::Moved, Some(i)) => {
+            let previous = model.touches[i].1;
+            // egui owns the gesture once it is dragging one of its widgets.
+            let egui_busy = ctx.egui_is_using_pointer();
+            match model.touches.as_slice() {
+                _ if egui_busy => {}
+                [_] => model.position += (pos - previous) / model.pixels_per_unit,
+                [a, b] => {
+                    let other = if i == 0 { b.1 } else { a.1 };
+                    // The midpoint between the fingers moves by half of this finger's motion.
+                    model.position += (pos - previous) / 2.0 / model.pixels_per_unit;
+                    let before = previous.distance(other);
+                    if before > 1.0 {
+                        model.zoom(pos.distance(other) / before, (pos + other) / 2.0);
+                    }
+                }
+                _ => {}
+            }
+            model.touches[i].1 = pos;
+        }
+        (TouchPhase::Ended | TouchPhase::Canceled, Some(i)) => {
+            model.touches.remove(i);
+        }
+        _ => {}
+    }
+}
+
 fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     let ctx = app.egui_for_window(model.window);
-    if ctx.is_pointer_over_egui() || ctx.egui_wants_keyboard_input() {
+    if ctx.is_pointer_over_egui() || ctx.text_edit_focused() {
         return;
     }
     let delta = match wheel.unit {
@@ -723,13 +798,13 @@ fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     // Gesture keys win over the modifiers so they combine with Ctrl. That matters
     // on laptops: libinput's disable-while-typing turns the touchpad off while a
     // letter is held, unless a modifier was pressed first.
-    if key_gesture(model, &keys, along_held_edges(&keys, content)) {
+    if key_gesture(model, &keys, content, along_held_edges(&keys, content)) {
         return;
     }
     if modifiers.shift {
         model.zoom((dominant / 200.0).exp(), app.mouse());
     } else if modifiers.ctrl {
-        model.resolution = (model.resolution - dominant / 50.0).clamp(0.0, MAX_RESOLUTION);
+        model.resolution = (model.resolution - dominant / 50.0).clamp(0.0, MAX_UI_RESOLUTION);
     } else {
         model.position += content / model.pixels_per_unit;
     }
@@ -790,6 +865,7 @@ fn view(app: &App, model: &Model) {
         blend: model.blend(),
         line_width: LINE_WIDTH,
         coloring: model.coloring as u32,
+        stretch_octaves: STRETCH_OCTAVES,
     };
     // One quad, drawn once per segment; the shader places its corners.
     let grid = draw.shader_model(GridShader { params });

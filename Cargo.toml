@@ -15,14 +15,24 @@ bevy = { version = "0.19", default-features = false }
 num = "0.4"
 
 [dev-dependencies]
-criterion = "0.8"
 # Checks in tests that generated shader code compiles. Same version as wgpu uses.
 naga = { version = "29", features = ["wgsl-in"] }
 
-[[bench]]
-name = "gridlines"
-harness = false
-
 [profile.dev]
-# Gridline generation is hot; keep debug builds usable.
+# Bevy is slow unoptimized; keep debug builds usable.
 opt-level = 1
+
+[patch.crates-io]
+# nannou 0.20.0 with fixes for the web build (vendor/nannou, src/app.rs and
+# src/window.rs): its default web window passed a float resolution, which
+# doesn't compile against Bevy 0.19 (upstream PR nannou-org/nannou#1100), and
+# it now fills its parent element and keeps that size when the app configures
+# the window, instead of taking the desktop resolution. Drop once upstream has both.
+nannou = { path = "vendor/nannou" }
+
+[profile.web]
+# The browser build (web/build.sh): smaller download over a faster build.
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+panic = "abort"
