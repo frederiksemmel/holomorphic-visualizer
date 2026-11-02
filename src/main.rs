@@ -81,11 +81,11 @@ struct GridParams {
 /// constants in `src/grid.wgsl`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Coloring {
-    #[default]
     White,
     /// Which line of the source grid this is.
     Source,
     /// arg z of the source point, kept through the map.
+    #[default]
     Phase,
     /// log |f'(z)|: how much `f` scales lengths here.
     Stretch,
@@ -345,6 +345,7 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "hold W / A / S / D (top / left / bottom / right edge)");
     hint(ui, "+ scroll or move the mouse to drag that edge;");
     hint(ui, "A + D or W + S slide the grid, all four move it");
+    hint(ui, "touchpad off while a key is held? add Ctrl: Ctrl + A + scroll");
 
     ui.separator();
     ui.horizontal(|ui| {
@@ -518,18 +519,41 @@ fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     };
 
     let keys = app.keys();
-    let any = |a, b| keys.pressed(a) || keys.pressed(b);
+    // Modifiers by meaning, not position, so a remapped key (e.g. CapsLock as
+    // Ctrl via xkb `ctrl:nocaps`) counts too.
+    let modifiers = ctx.input(|i| i.modifiers);
+    // Positive y moves content down; the plane has y pointing up.
+    let content = vec2(delta.x, -delta.y);
 
-    if any(KeyCode::ShiftLeft, KeyCode::ShiftRight) {
+    // Gesture keys win over the modifiers so they combine with Ctrl. That matters
+    // on laptops: libinput's disable-while-typing turns the touchpad off while a
+    // letter is held, unless a modifier was pressed first.
+    if key_gesture(model, &keys, along_held_edges(&keys, content)) {
+        return;
+    }
+    if modifiers.shift {
         model.zoom((dominant / 200.0).exp(), app.mouse());
-    } else if any(KeyCode::ControlLeft, KeyCode::ControlRight) {
+    } else if modifiers.ctrl {
         model.resolution = (model.resolution - dominant / 50.0).clamp(0.0, MAX_RESOLUTION);
     } else {
-        // Positive y moves content down; the plane has y pointing up.
-        let content = vec2(delta.x, -delta.y);
-        if !key_gesture(model, &keys, content) {
-            model.position += content / model.pixels_per_unit;
-        }
+        model.position += content / model.pixels_per_unit;
+    }
+}
+
+/// A scroll goes mostly one way, and a mouse wheel only vertically. When only
+/// left/right (A/D) or only top/bottom (W/S) edge keys are held, whichever way
+/// the scroll goes drives that axis, so plain wheel scrolling moves any edge.
+fn along_held_edges(keys: &ButtonInput<KeyCode>, content: Vec2) -> Vec2 {
+    let any = |a, b| keys.pressed(a) || keys.pressed(b);
+    let dominant = if content.x.abs() >= content.y.abs() {
+        content.x
+    } else {
+        content.y
+    };
+    match (any(KeyCode::KeyA, KeyCode::KeyD), any(KeyCode::KeyW, KeyCode::KeyS)) {
+        (true, false) => vec2(dominant, content.y),
+        (false, true) => vec2(content.x, dominant),
+        _ => content,
     }
 }
 
