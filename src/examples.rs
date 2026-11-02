@@ -18,18 +18,9 @@ pub struct Example {
     pub parameter: Complex<f32>,
 }
 
-/// The functions on offer in the control window.
+/// The functions on offer in the control window. The first one is what the
+/// visualizer opens with, and what links without `ex=` start from.
 pub const EXAMPLES: [Example; 6] = [
-    Example {
-        name: "Möbius",
-        slug: "mobius",
-        formula: "p * (1 - z) / (1 + z)",
-        about: "A Möbius transformation: it maps lines and circles to lines and circles. \
-                Every Möbius transformation contains a Mickey Mouse (unproven conjecture).",
-        links: &[],
-        grid: [0.0, 1.0, 0.0, 1.0],
-        parameter: Complex::new(1.0, 0.0),
-    },
     Example {
         name: "Exponential",
         slug: "exp",
@@ -38,6 +29,15 @@ pub const EXAMPLES: [Example; 6] = [
                 The strip of height 2π wraps once around the origin.",
         links: &[],
         grid: [-1.0, 1.0, -3.0, 3.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Möbius",
+        slug: "mobius",
+        formula: "p * (1 - z) / (1 + z)",
+        about: "A Möbius transformation: it maps lines and circles to lines and circles.",
+        links: &[],
+        grid: [0.0, 1.0, 0.0, 1.0],
         parameter: Complex::new(1.0, 0.0),
     },
     Example {
@@ -75,16 +75,11 @@ pub const EXAMPLES: [Example; 6] = [
         name: "Escher",
         slug: "escher",
         formula: "exp(2pi i z / (2pi i + log(p * e^6)))",
-        about: "M. C. Escher's Print Gallery (1956). This is exp(z)^(1/α) with \
-                α = (2πi + log(p e⁶)) / 2πi: the straight picture behind the print \
-                contains itself, scaled down by p e⁶, and w ↦ w^(1/α) curls it so that \
-                one turn around the centre zooms by that much. Escher used 256 \
-                (p = 256/e⁶ ≈ 0.635); his picture contains a copy of itself shrunk by \
-                22.58 and turned by 157.6°. With p = 1 a turn zooms by e⁶ ≈ 403, and \
-                log(e⁶) = 6 is a whole number of grid spacings, so after each turn \
-                every circle meets up with another one. The grid is the straight \
-                picture in log coordinates, w = exp(z): vertical lines are circles \
-                around its centre, horizontal lines are rays.",
+        about: "M. C. Escher's Print Gallery (1956). The grid is his straight picture, \
+                which contains itself scaled down, in log coordinates: vertical lines \
+                are circles around its centre, horizontal lines are rays. f curls it so \
+                that one turn around the centre zooms in by p e⁶. Escher used 256 \
+                (p ≈ 0.635); with p = 1 the circles meet up after every turn.",
         links: &[
             (
                 "Print Gallery on Wikipedia",

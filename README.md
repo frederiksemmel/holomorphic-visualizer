@@ -27,9 +27,8 @@ which you can then edit (see [Usage](#usage)). The screenshots use the
 default Phase coloring (`3`): every point keeps the hue of its angle arg z in
 the source grid, so you can see where each direction went.
 
-The basic one is a Möbius transformation, p · (1 − z)/(1 + z), applied to the
-unit square. It should be called a Mickey Mouse function, as every Möbius
-transformation contains a Mickey Mouse (unproven conjecture).
+A Möbius transformation, p · (1 − z)/(1 + z), maps lines and circles to lines
+and circles. Here it bends the unit square:
 
 ![Möbius transformation](examples/mobius.png)
 

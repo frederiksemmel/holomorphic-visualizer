@@ -357,13 +357,11 @@ impl Parser {
                 "pi" => Ok(Expr::Number(std::f32::consts::PI)),
                 "e" => Ok(Expr::Number(std::f32::consts::E)),
                 _ => {
-                    let Some(&(_, helper)) = FUNCTIONS.iter().find(|(f, _)| *f == name) else {
-                        return Err(self.error_at(
-                            token.position,
-                            format!("unknown name '{name}': use z, p, i, pi, e or a function"),
-                        ));
-                    };
                     let open = self.position();
+                    let Some(&(_, helper)) = FUNCTIONS.iter().find(|(f, _)| *f == name) else {
+                        let called = self.peek().map(|t| &t.kind) == Some(&TokenKind::Open);
+                        return Err(self.error_at(token.position, unknown_name(&name, called)));
+                    };
                     if self.peek().map(|t| &t.kind) != Some(&TokenKind::Open) {
                         return Err(
                             self.error_at(open, format!("write {name}(…) with parentheses"))
@@ -392,6 +390,24 @@ impl Parser {
             _ => Err(self.error_at(open, "this '(' is never closed".into())),
         }
     }
+}
+
+/// The error for a name that is neither a variable, a constant nor in
+/// [`FUNCTIONS`]; `called` if a '(' follows it.
+fn unknown_name(name: &str, called: bool) -> String {
+    // Functions people try that are left out on purpose.
+    if ["conj", "abs", "re", "im", "arg"].contains(&name.to_lowercase().as_str()) {
+        return format!("'{name}' is left out: it isn't holomorphic, so its map isn't conformal");
+    }
+    if called {
+        let names: Vec<&str> = FUNCTIONS.iter().map(|&(f, _)| f).collect();
+        let (last, rest) = names.split_last().unwrap();
+        return format!(
+            "unknown function '{name}': use {} or {last}",
+            rest.join(", ")
+        );
+    }
+    format!("unknown name '{name}': use z, p, i, pi, e or a function")
 }
 
 #[cfg(test)]
@@ -462,6 +478,15 @@ mod tests {
         assert_eq!(error("z +").position, 3);
         assert_eq!(error("2 * w").position, 4);
         assert!(error("2 * w").message.contains("unknown name 'w'"));
+        assert_eq!(error("1 + zeta(z)").position, 4);
+        assert!(
+            error("zeta(z)")
+                .message
+                .contains("unknown function 'zeta': use exp, log,")
+        );
+        assert!(error("zeta(z)").message.ends_with("cosh or tanh"));
+        assert!(error("conj(z)").message.contains("isn't holomorphic"));
+        assert!(error("Re(z)").message.contains("'Re' is left out"));
         assert_eq!(error("sin z").position, 4);
         assert_eq!(error("(z + 1").position, 0);
         assert_eq!(error("z)").position, 1);
