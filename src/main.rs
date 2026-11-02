@@ -313,7 +313,7 @@ impl Model {
             min.im,
             max.im,
             MAX_DENSITY,
-            bench_segments(),
+            MAX_SEGMENTS,
         )
     }
 
@@ -431,46 +431,7 @@ fn model(app: &App) -> Model {
     }
 }
 
-// BENCH: temporary frame-time harness, never committed.
-fn bench_segments() -> u32 {
-    std::env::var("CV_SEGMENTS").ok().and_then(|s| s.parse().ok()).unwrap_or(MAX_SEGMENTS)
-}
-fn bench(app: &App, model: &mut Model) {
-    use std::sync::Mutex;
-    use std::time::Instant;
-    static STATE: Mutex<Option<(Instant, Instant, u32, f64)>> = Mutex::new(None);
-    let Ok(example) = std::env::var("CV_BENCH") else { return };
-    let mut state = STATE.lock().unwrap();
-    let now = Instant::now();
-    let Some((start, last, frames, worst)) = state.as_mut() else {
-        app.set_update_mode(bevy::winit::UpdateMode::Continuous);
-        model.set_example(example.parse().unwrap());
-        if let Ok(zoom) = std::env::var("CV_ZOOM") {
-            model.pixels_per_unit = zoom.parse().unwrap();
-        }
-        if std::env::var("CV_OFFSCREEN").is_ok() {
-            model.position = vec2(1000.0, 0.0);
-        }
-        *state = Some((now, now, 0, 0.0));
-        return;
-    };
-    *worst = worst.max((now - *last).as_secs_f64() * 1e3);
-    *last = now;
-    *frames += 1;
-    let elapsed = (now - *start).as_secs_f64();
-    if elapsed > 2.0 {
-        eprintln!(
-            "BENCH example={example} segments={} avg_ms={:.2} worst_ms={:.2}",
-            model.grid_layout().segment_count(),
-            elapsed * 1e3 / *frames as f64,
-            worst
-        );
-        *state = Some((now, now, 0, 0.0));
-    }
-}
-
 fn update(app: &App, model: &mut Model) {
-    bench(app, model);
     let ctx = app.egui_for_window(model.window);
     let window = app.window_rect();
     model.half_view = 0.5 * vec2(window.w(), window.h());
