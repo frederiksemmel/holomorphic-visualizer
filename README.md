@@ -130,13 +130,14 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       `cos`, `tan`, `sinh`, `cosh`, `tanh`. `log`, `sqrt` and non-integer
       powers use the principal branch, cut along the negative real axis.
       Integer powers like `z^3` or `z^-2` are multiplied out and have no cut.
-* Dynamic function eval: the grid is mapped on the GPU, so the formula is
-  never evaluated on the CPU. `src/expr.rs` parses it and translates it into
-  WGSL (`p sin(z)` becomes `cmul(p, csin(z))`), and the app rebuilds the grid
-  shader from `src/grid.wgsl`, the complex helpers in `src/complex.wgsl` and
-  the generated `f`, which Bevy recompiles. Only formulas that parse are sent
-  to the GPU, and the tests compile the code generated for a range of formulas
-  with naga.
+* Dynamic function eval: the grid is mapped on the GPU. `src/expr.rs` parses
+  the formula and translates it into WGSL (`p sin(z)` becomes
+  `cmul(p, csin(z))`), and the app rebuilds the grid shader from
+  `src/grid.wgsl`, the complex helpers in `src/complex.wgsl` and the generated
+  `f`, which Bevy recompiles. Only formulas that parse are sent to the GPU,
+  and the tests compile the code generated for a range of formulas with naga.
+  The CPU evaluates the same parse tree, with the same branch cuts, only for
+  the few points the mouse needs, such as which grid border is under it.
 * Color modes (`c` cycles them, `1`–`5` pick one):
     * **White**: plain lines.
     * **Source**: horizontal lines warm, vertical lines cool, shaded by
