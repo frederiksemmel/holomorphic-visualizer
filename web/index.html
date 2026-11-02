@@ -1,9 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-wasm-size="">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>Conformal Map Visualizer</title>
+    <meta
+      name="description"
+      content="Type any complex function f(z) and watch it bend a grid of the plane, live on the GPU. Möbius maps, exp, sin, Joukowski and Escher's Print Gallery."
+    />
+    <!-- What chats and social sites show for a shared link. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Conformal Map Visualizer" />
+    <meta
+      property="og:description"
+      content="Type any complex function f(z) and watch it bend the plane, live in your browser."
+    />
+    <meta property="og:url" content="https://frederiksemmel.github.io/holomorphic-visualizer/" />
+    <meta property="og:image" content="https://frederiksemmel.github.io/holomorphic-visualizer/social.png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 14C6 9 6 7 2 2M8 15C9 10 9 6 8 1M14 14C10 9 10 7 14 2M1 4C6 6 10 6 15 4M1 12C6 10 10 10 15 12' fill='none' stroke='%2366ccff' stroke-width='1.3'/%3E%3C/svg%3E"
+    />
     <style>
       html,
       body {
@@ -20,13 +40,71 @@
         touch-action: none;
         outline: none;
       }
+      a {
+        color: #6cf;
+      }
       #status {
         position: fixed;
         inset: 0;
         display: grid;
-        place-items: center;
+        place-content: center;
+        justify-items: center;
+        gap: 16px;
         padding: 16px;
         text-align: center;
+      }
+      #status img {
+        max-width: min(720px, 100%);
+        max-height: 60dvh;
+        border-radius: 6px;
+      }
+      #status.done {
+        opacity: 0;
+        transition: opacity 0.4s;
+        pointer-events: none;
+      }
+      #loading {
+        display: grid;
+        gap: 12px;
+        width: min(320px, 80vw);
+      }
+      #title {
+        color: #ddd;
+        font-size: 20px;
+      }
+      #bar {
+        height: 4px;
+        border-radius: 2px;
+        background: #222;
+        overflow: hidden;
+      }
+      #fill {
+        width: 0;
+        height: 100%;
+        background: #6cf;
+        transition: width 0.2s;
+      }
+      /* A stripe sweeping across, for steps without measurable progress. */
+      #bar.busy #fill {
+        width: 30% !important;
+        animation: sweep 1.2s ease-in-out infinite;
+      }
+      @keyframes sweep {
+        from {
+          transform: translateX(-100%);
+        }
+        to {
+          transform: translateX(340%);
+        }
+      }
+      #phase {
+        color: #888;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+      }
+      #status p {
+        max-width: 36em;
+        margin: 0;
       }
       #source {
         position: fixed;
@@ -39,28 +117,101 @@
     </style>
   </head>
   <body>
-    <div id="status">Loading the visualizer…</div>
+  <body>
+    <div id="status">
+      <div id="loading">
+        <div id="title">Conformal Map Visualizer</div>
+        <div id="bar"><div id="fill"></div></div>
+        <div id="phase">Loading…</div>
+      </div>
+    </div>
     <a id="source" href="https://github.com/frederiksemmel/holomorphic-visualizer">source on GitHub</a>
     <script type="module">
       const status = document.getElementById("status");
+      const bar = document.getElementById("bar");
+      const fill = document.getElementById("fill");
+      const phase = document.getElementById("phase");
+
+      // Instead of a blank page: what it would look like, and how to get it.
+      function unsupported(reason) {
+        status.innerHTML = `
+          <img src="preview.gif" alt="A grid of the complex plane bending under a conformal map" />
+          <p><strong>${reason}</strong></p>
+          <p>The visualizer draws with WebGPU. It runs in Chrome or Edge (on Linux, turn on
+          <code>chrome://flags/#enable-unsafe-webgpu</code>), Safari 26 or newer, and Firefox 141
+          or newer on Windows. On a computer without a usable GPU you can
+          <a href="https://github.com/frederiksemmel/holomorphic-visualizer">run it as a desktop app</a>.</p>`;
+      }
+
+      // `fraction` in 0..1 fills the bar; null makes it a busy stripe for a
+      // step whose progress we can't see.
+      function progress(text, fraction) {
+        phase.textContent = text;
+        bar.classList.toggle("busy", fraction == null);
+        if (fraction != null) fill.style.width = `${Math.round(100 * Math.min(fraction, 1))}%`;
+      }
+
+      // The app writes the view into the URL without this event; it fires when
+      // someone edits the #… part or opens another link in the same tab.
+      addEventListener("hashchange", () => location.reload());
+
+      // Most of the wait is this download. It counts unpacked bytes, so the
+      // build writes the unpacked size into <html data-wasm-size>; the server
+      // may send it compressed, and then Content-Length doesn't match.
+      const wasmSize = Number(document.documentElement.dataset.wasmSize) || 0;
+      const download = new AbortController();
+      async function downloadWasm() {
+        const response = await fetch("app_bg.wasm", { signal: download.signal });
+        if (!response.ok || !response.body) return response;
+        const reader = response.body.getReader();
+        let loaded = 0;
+        const counted = new ReadableStream({
+          async pull(controller) {
+            const { done, value } = await reader.read();
+            if (done) {
+              progress("Compiling…", null);
+              controller.close();
+              return;
+            }
+            loaded += value.byteLength;
+            const mb = (loaded / 1e6).toFixed(1);
+            if (wasmSize) progress(`Downloading… ${Math.round((100 * loaded) / wasmSize)}%`, loaded / wasmSize);
+            else progress(`Downloading… ${mb} MB`, null);
+            controller.enqueue(value);
+          },
+        });
+        // A Response with this type lets the browser compile while it downloads.
+        return new Response(counted, { headers: { "Content-Type": "application/wasm" } });
+      }
+
+      // Browsers can have navigator.gpu and still no adapter to give out
+      // (blocked drivers, no GPU); the app would then panic on a blank canvas.
+      // The download starts alongside the check, as it takes much longer.
+      const wasm = navigator.gpu ? downloadWasm() : null;
+      const glue = navigator.gpu ? import("./app.js") : null;
+      const adapter = navigator.gpu && (await navigator.gpu.requestAdapter().catch(() => null));
       if (!navigator.gpu) {
-        status.innerHTML =
-          "This needs a browser with WebGPU: Chrome or Edge, Safari 26 or newer, " +
-          "or Firefox 141 or newer on Windows.";
+        unsupported("This browser has no WebGPU.");
+      } else if (!adapter) {
+        download.abort();
+        wasm.catch(() => {});
+        unsupported("This browser has WebGPU, but no GPU it is allowed to use.");
       } else {
-        // The message goes once Bevy has put its canvas on the page.
+        // The loading screen fades once Bevy has put its canvas on the page.
         new MutationObserver((_, observer) => {
           if (document.querySelector("canvas")) {
-            status.remove();
             observer.disconnect();
+            status.classList.add("done");
+            setTimeout(() => status.remove(), 400);
           }
         }).observe(document.body, { childList: true });
 
-        import("./app.js")
-          .then((app) => app.default())
+        Promise.all([glue, wasm])
+          .then(([app, module_or_path]) => app.default({ module_or_path }))
           .catch((error) => {
             // winit leaves its start-up through this exception on purpose.
             if (String(error).includes("Using exceptions for control flow")) return;
+            status.classList.remove("done");
             status.textContent = "The visualizer failed to start: " + error;
             console.error(error);
           });

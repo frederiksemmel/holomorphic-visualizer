@@ -14,7 +14,9 @@ wasm-bindgen --target web --no-typescript --out-dir "$out" --out-name app \
   "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/web/conformal-visualizer.wasm"
 if command -v wasm-opt >/dev/null; then
   # Features come from the target_features section that rustc emits.
-  wasm-opt -Os --strip-debug --strip-producers -o "$out/app_bg.wasm" "$out/app_bg.wasm"
+  wasm-opt -Oz --strip-debug --strip-producers -o "$out/app_bg.wasm" "$out/app_bg.wasm"
 fi
-cp web/index.html "$out/"
+cp web/index.html web/preview.gif web/social.png "$out/"
+# The loading screen measures its progress against the unpacked size.
+sed -i "s/data-wasm-size=\"\"/data-wasm-size=\"$(stat -c %s "$out/app_bg.wasm")\"/" "$out/index.html"
 du -h "$out"/*

@@ -1,99 +1,12 @@
 use bevy::asset::{Assets, uuid_handle};
 use bevy::input::{ButtonInput, mouse::MouseScrollUnit, touch::TouchPhase};
+use conformal_visualizer::examples::EXAMPLES;
 use conformal_visualizer::expr::{self, ParseError};
-use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view};
+use conformal_visualizer::scene::{Coloring, DEFAULT_PIXELS_PER_UNIT, DEFAULT_RESOLUTION, Scene};
+use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph};
 use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
 use num::Complex;
-
-/// A function to look at, with a grid and parameter that show it well.
-struct Example {
-    name: &'static str,
-    /// What to type for f(z); see src/expr.rs for the syntax.
-    formula: &'static str,
-    about: &'static str,
-    /// Further reading: (link text, URL).
-    links: &'static [(&'static str, &'static str)],
-    /// x min, x max, y min, y max.
-    grid: [f32; 4],
-    parameter: Complex<f32>,
-}
-
-/// The functions on offer in the control window.
-const EXAMPLES: [Example; 6] = [
-    Example {
-        name: "Möbius",
-        formula: "p * (1 - z) / (1 + z)",
-        about: "A Möbius transformation: it maps lines and circles to lines and circles. \
-                Every Möbius transformation contains a Mickey Mouse (unproven conjecture).",
-        links: &[],
-        grid: [0.0, 1.0, 0.0, 1.0],
-        parameter: Complex::new(1.0, 0.0),
-    },
-    Example {
-        name: "Exponential",
-        formula: "exp(p * z)",
-        about: "Horizontal lines become rays, vertical lines become circles. \
-                The strip of height 2π wraps once around the origin.",
-        links: &[],
-        grid: [-1.0, 1.0, -3.0, 3.0],
-        parameter: Complex::new(1.0, 0.0),
-    },
-    Example {
-        name: "Power",
-        formula: "z^p",
-        about: "For real p it multiplies angles at the origin by p. \
-                Try a tall rectangle just right of 0.",
-        links: &[],
-        grid: [0.5, 1.0, -1.0, 1.0],
-        parameter: Complex::new(3.0, 0.0),
-    },
-    Example {
-        name: "Sine",
-        formula: "p * sin(z)",
-        about: "Vertical lines become hyperbolas, horizontal lines ellipses, \
-                all with foci at ±p.",
-        links: &[],
-        grid: [-1.5, 1.5, -1.0, 1.0],
-        parameter: Complex::new(1.0, 0.0),
-    },
-    Example {
-        name: "Joukowski",
-        formula: "z + p / z",
-        about: "The Joukowski map, used to model airfoils. It folds the circle |z| = √|p| \
-                onto a segment; inside and outside that circle each cover the rest \
-                of the plane once.",
-        links: &[],
-        grid: [-2.0, 2.0, -2.0, 2.0],
-        parameter: Complex::new(1.0, 0.0),
-    },
-    Example {
-        name: "Escher",
-        formula: "exp(2pi i z / (2pi i + log(p * e^6)))",
-        about: "M. C. Escher's Print Gallery (1956). This is exp(z)^(1/α) with \
-                α = (2πi + log(p e⁶)) / 2πi: the straight picture behind the print \
-                contains itself, scaled down by p e⁶, and w ↦ w^(1/α) curls it so that \
-                one turn around the centre zooms by that much. Escher used 256 \
-                (p = 256/e⁶ ≈ 0.635); his picture contains a copy of itself shrunk by \
-                22.58 and turned by 157.6°. With p = 1 a turn zooms by e⁶ ≈ 403, and \
-                log(e⁶) = 6 is a whole number of grid spacings, so after each turn \
-                every circle meets up with another one. The grid is the straight \
-                picture in log coordinates, w = exp(z): vertical lines are circles \
-                around its centre, horizontal lines are rays.",
-        links: &[
-            (
-                "Print Gallery on Wikipedia",
-                "https://en.wikipedia.org/wiki/Print_Gallery_(M._C._Escher)",
-            ),
-            (
-                "de Smit & Lenstra: The Mathematical Structure of Escher's Print Gallery",
-                "https://pub.math.leidenuniv.nl/~smitbde/papers/2003-de_smit-lenstra-escher.pdf",
-            ),
-        ],
-        grid: [-12.0, -1.0, -3.0, 3.25],
-        parameter: Complex::new(1.0, 0.0),
-    },
-];
 
 /// Points per scroll "line" for mice that report wheel clicks instead of pixels.
 const POINTS_PER_LINE: f32 = 24.0;
@@ -105,7 +18,6 @@ const DOMAIN_LIMIT: f32 = 15.0;
 /// Zoom limits, in screen points per unit. Positions are f32, so panning loses
 /// about |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=1_000_000.0;
-const DEFAULT_PIXELS_PER_UNIT: f32 = 150.0;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range.
 const HOMOTOPY_TRAVEL: f32 = 300.0;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
@@ -117,6 +29,13 @@ const LINE_WIDTH: f32 = 1.5;
 /// Stretch factors beyond 2^±STRETCH_OCTAVES get the extreme color. Sent to
 /// `src/grid.wgsl` in `GridParams`, so the legend and the shader agree.
 const STRETCH_OCTAVES: f32 = 2.0;
+/// Seconds between updates of the page URL. Browsers limit how often a page
+/// may rewrite its URL (Safari to 100 times in 30 s), and a slider drag
+/// changes the scene every frame.
+const LINK_INTERVAL: f32 = 0.4;
+/// Where the browser version lives; links copied in the desktop app point there.
+#[cfg(not(target_arch = "wasm32"))]
+const WEB_URL: &str = "https://frederiksemmel.github.io/holomorphic-visualizer/";
 
 const GRID_SHADER: Handle<Shader> = uuid_handle!("b69f3f88-de67-4239-b652-1b805606f44f");
 
@@ -194,44 +113,80 @@ struct GridParams {
     half_view: Vec2,
 }
 
-/// How grid lines are colored. The discriminants are the `COLORING_*`
-/// constants in `src/grid.wgsl`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum Coloring {
-    White,
-    /// Which line of the source grid this is.
-    Source,
-    /// arg z of the source point, kept through the map.
-    #[default]
-    Phase,
-    /// log |f'(z)|: how much `f` scales lengths here.
-    Stretch,
-    /// arg f'(z): how far `f` turns directions here.
-    Rotation,
-}
+/// The page URL, which carries the scene (see `conformal_visualizer::scene`).
+#[cfg(target_arch = "wasm32")]
+mod link {
+    /// The fragment of the page URL, without `#`.
+    pub fn fragment() -> String {
+        web_sys::window()
+            .and_then(|window| window.location().hash().ok())
+            .map(|hash| hash.trim_start_matches('#').to_owned())
+            .unwrap_or_default()
+    }
 
-impl Coloring {
-    const ALL: [Coloring; 5] = [
-        Coloring::White,
-        Coloring::Source,
-        Coloring::Phase,
-        Coloring::Stretch,
-        Coloring::Rotation,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            Coloring::White => "White",
-            Coloring::Source => "Source",
-            Coloring::Phase => "Phase",
-            Coloring::Stretch => "Stretch",
-            Coloring::Rotation => "Rotation",
+    /// Puts `fragment` in the page URL without adding a history entry, and
+    /// without the `hashchange` event that `index.html` reloads the page on.
+    pub fn set_fragment(fragment: &str) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let url = if fragment.is_empty() {
+            let location = window.location();
+            location.pathname().unwrap_or_default() + &location.search().unwrap_or_default()
+        } else {
+            format!("#{fragment}")
+        };
+        if let Ok(history) = window.history() {
+            // It throws if called too often; the next update tries again.
+            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
         }
     }
 
-    fn next(self) -> Self {
-        Self::ALL[(self as usize + 1) % Self::ALL.len()]
+    /// A link to this page showing `fragment`.
+    pub fn url(fragment: &str) -> String {
+        let href = web_sys::window()
+            .and_then(|window| window.location().href().ok())
+            .unwrap_or_default();
+        let page = href.split('#').next().unwrap_or_default();
+        super::with_fragment(page, fragment)
     }
+}
+
+/// The desktop app takes a link (or just its `#…` part) as its argument, and
+/// copies links to the browser version.
+#[cfg(not(target_arch = "wasm32"))]
+mod link {
+    pub fn fragment() -> String {
+        let argument = std::env::args().nth(1).unwrap_or_default();
+        match argument.split_once('#') {
+            Some((_, fragment)) => fragment.to_owned(),
+            None => argument,
+        }
+    }
+
+    pub fn set_fragment(_fragment: &str) {}
+
+    pub fn url(fragment: &str) -> String {
+        super::with_fragment(super::WEB_URL, fragment)
+    }
+}
+
+fn with_fragment(page: &str, fragment: &str) -> String {
+    if fragment.is_empty() {
+        page.to_owned()
+    } else {
+        format!("{page}#{fragment}")
+    }
+}
+
+/// The animation from the identity to `f` and back (see `conformal_visualizer::morph`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Morph {
+    Off,
+    /// Starts on the next update, from this homotopy.
+    Starting(f32),
+    /// Playing; the app time at which the animation was at its start.
+    Since(f32),
 }
 
 struct Model {
@@ -258,7 +213,14 @@ struct Model {
     parameter: Complex<f32>,
     /// Blend between the identity (0) and `f` (1).
     homotopy: f32,
+    morph: Morph,
     coloring: Coloring,
+    /// The fragment last put in the page URL, and the app time it was put there.
+    link_written: (String, f32),
+    /// The fragment of the link "Copy link" last copied.
+    link_copied: Option<String>,
+    /// Redrawing every frame (animating, or a URL update is due) rather than on input.
+    continuous: bool,
     /// Mouse button held on the canvas, and the cursor position at the last update.
     drag: Option<(MouseButton, Vec2)>,
     /// The "hold" button in the control window is pressed.
@@ -273,6 +235,10 @@ struct Model {
     touches: Vec<(u64, Vec2)>,
     /// Screen area of the control window, in points from the top left.
     panel: egui::Rect,
+    /// The control window shows its controls, not just its header. Until the
+    /// user taps the header (`None`), it is open on wide screens only; that is
+    /// decided every frame, as the window gets its real size a few frames in.
+    panel_open: Option<bool>,
 }
 
 impl Model {
@@ -330,7 +296,8 @@ impl Model {
         }
     }
 
-    /// Shows `EXAMPLES[index]` with its own grid and parameter.
+    /// Shows `EXAMPLES[index]` with its own grid and parameter, bending from
+    /// the source grid.
     fn set_example(&mut self, index: usize) {
         let example = &EXAMPLES[index];
         self.example = index;
@@ -338,6 +305,50 @@ impl Model {
         [self.x_min, self.x_max, self.y_min, self.y_max] = example.grid;
         self.parameter = example.parameter;
         self.reset_view();
+        self.homotopy = 0.0;
+        self.morph = Morph::Starting(0.0);
+    }
+
+    /// What a link to the current view carries.
+    fn scene(&self) -> Scene {
+        Scene {
+            example: self.example,
+            formula: self.formula.clone(),
+            parameter: self.parameter,
+            grid: [self.x_min, self.x_max, self.y_min, self.y_max],
+            resolution: self.resolution,
+            coloring: self.coloring,
+            position: self.position.to_array(),
+            pixels_per_unit: self.pixels_per_unit,
+            homotopy: (self.morph == Morph::Off).then_some(self.homotopy),
+        }
+    }
+
+    /// Shows what a link carries, within the limits the controls have.
+    fn set_scene(&mut self, scene: Scene) {
+        self.example = scene.example;
+        self.set_formula(scene.formula);
+        [self.x_min, self.x_max, self.y_min, self.y_max] =
+            scene.grid.map(|edge| edge.clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT));
+        self.parameter = scene.parameter;
+        self.resolution = scene.resolution.clamp(0.0, MAX_UI_RESOLUTION);
+        self.coloring = scene.coloring;
+        self.position = Vec2::from_array(scene.position);
+        self.pixels_per_unit = scene
+            .pixels_per_unit
+            .clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
+        (self.homotopy, self.morph) = match scene.homotopy {
+            Some(homotopy) => (homotopy, Morph::Off),
+            None => (0.0, Morph::Starting(0.0)),
+        };
+    }
+
+    /// Starts the animation from the current homotopy, or stops it where it is.
+    fn toggle_morph(&mut self) {
+        self.morph = match self.morph {
+            Morph::Off => Morph::Starting(self.homotopy),
+            _ => Morph::Off,
+        };
     }
 
     /// Shows `formula`, if it parses.
@@ -421,12 +432,13 @@ fn model(app: &App) -> Model {
         .mouse_wheel(mouse_wheel)
         .touch(touch)
         .build();
-    // Only redraw on input; the picture is static otherwise.
+    // Only redraw on input, unless something moves (see `set_update_mode`).
     app.set_update_mode(UpdateMode::wait());
 
     let example = &EXAMPLES[0];
     let [x_min, x_max, y_min, y_max] = example.grid;
-    Model {
+    let fragment = link::fragment();
+    let mut model = Model {
         window,
         example: 0,
         formula: example.formula.into(),
@@ -436,14 +448,19 @@ fn model(app: &App) -> Model {
         pixels_per_unit: DEFAULT_PIXELS_PER_UNIT,
         position: Vec2::ZERO,
         apply_function: true,
-        resolution: 2.0,
+        resolution: DEFAULT_RESOLUTION,
         x_min,
         x_max,
         y_min,
         y_max,
         parameter: example.parameter,
         homotopy: 1.0,
+        morph: Morph::Off,
         coloring: Coloring::default(),
+        // Due at once, so the URL shows the link in its own words.
+        link_written: (fragment.clone(), f32::NEG_INFINITY),
+        link_copied: None,
+        continuous: false,
         drag: None,
         peek_button: false,
         peek: false,
@@ -451,6 +468,41 @@ fn model(app: &App) -> Model {
         half_view: vec2(600.0, 400.0),
         touches: Vec::new(),
         panel: egui::Rect::NOTHING,
+        panel_open: None,
+    };
+    model.set_scene(Scene::from_fragment(&fragment));
+    model
+}
+
+/// Plays the animation, keeps the page URL showing the scene, and redraws
+/// every frame only while either needs it.
+fn animate(app: &App, model: &mut Model) {
+    let now = app.time();
+    match model.morph {
+        Morph::Off => {}
+        Morph::Starting(homotopy) => {
+            model.morph = Morph::Since(now - morph::time_at(homotopy));
+            model.homotopy = homotopy;
+        }
+        Morph::Since(start) => model.homotopy = morph::blend(now - start),
+    }
+
+    let fragment = model.scene().to_fragment();
+    let (written, written_at) = &model.link_written;
+    let link_due = fragment != *written;
+    if link_due && now - written_at >= LINK_INTERVAL {
+        link::set_fragment(&fragment);
+        model.link_written = (fragment, now);
+    }
+
+    let continuous = model.morph != Morph::Off || link_due;
+    if continuous != model.continuous {
+        model.continuous = continuous;
+        app.set_update_mode(if continuous {
+            UpdateMode::Continuous
+        } else {
+            UpdateMode::wait()
+        });
     }
 }
 
@@ -459,14 +511,26 @@ fn update(app: &App, model: &mut Model) {
     let window = app.window_rect();
     model.half_view = 0.5 * vec2(window.w(), window.h());
 
-    // Phones get the canvas first; the panel opens from its title bar.
-    let wide = ctx.content_rect().width() > 700.0;
+    // Phones get the canvas first; the panel opens from its header.
+    let open = model
+        .panel_open
+        .unwrap_or_else(|| ctx.content_rect().width() > 700.0);
     let panel = egui::Window::new("Conformal Map")
+        // egui remembers a window's size by id; closed it should shrink to the header.
+        .id(egui::Id::new(("control window", open)))
+        .title_bar(false)
         .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
         .resizable(false)
-        .default_open(wide)
-        .vscroll(true)
-        .show(&ctx, |ui| controls(ui, model));
+        .vscroll(open)
+        .show(&ctx, |ui| {
+            if panel_header(ui, open).clicked() {
+                model.panel_open = Some(!open);
+            }
+            if open {
+                ui.separator();
+                controls(ui, model);
+            }
+        });
     if let Some(panel) = panel {
         model.panel = panel.response.rect;
     }
@@ -488,6 +552,7 @@ fn update(app: &App, model: &mut Model) {
         key_gesture(model, &keys, moved, moved);
     }
     mouse_drag(app, model, over_ui);
+    animate(app, model);
 }
 
 /// Left-drag pans, right-drag moves the parameter p. Drags must start on the canvas.
@@ -530,6 +595,7 @@ fn key_gesture(
         used = true;
     }
     if keys.pressed(KeyCode::KeyF) {
+        model.morph = Morph::Off;
         model.homotopy = (model.homotopy + (delta.x + delta.y) / HOMOTOPY_TRAVEL).clamp(0.0, 1.0);
         used = true;
     }
@@ -585,12 +651,60 @@ fn function_editor(ui: &mut egui::Ui, model: &mut Model) {
     }
 }
 
+/// The title of the control window, with an arrow. Tapping anywhere on it
+/// opens or closes the window: egui's own collapse arrow is too small a
+/// target on a phone.
+fn panel_header(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    let size = egui::vec2(240.0, 36.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let color = ui.style().interact(&response).text_color();
+    let painter = ui.painter();
+
+    let center = egui::pos2(rect.left() + 12.0, rect.center().y);
+    let s = 6.0;
+    let corners = if open {
+        [(-s, -0.6 * s), (s, -0.6 * s), (0.0, 0.8 * s)]
+    } else {
+        [(-0.6 * s, -s), (-0.6 * s, s), (0.8 * s, 0.0)]
+    };
+    let corners = corners.map(|(x, y)| center + egui::vec2(x, y)).to_vec();
+    painter.add(egui::Shape::convex_polygon(corners, color, egui::Stroke::NONE));
+    painter.text(
+        egui::pos2(rect.left() + 28.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "Conformal Map",
+        egui::FontId::proportional(18.0),
+        color,
+    );
+    response
+}
+
+/// Copies a link that opens exactly this view. The page URL always shows it
+/// too, so copying from the address bar works as well.
+fn share_button(ui: &mut egui::Ui, model: &mut Model) {
+    let fragment = model.scene().to_fragment();
+    ui.horizontal(|ui| {
+        if ui.button("Copy link").clicked() {
+            ui.ctx().copy_text(link::url(&fragment));
+            model.link_copied = Some(fragment.clone());
+        }
+        if model.link_copied.as_ref() == Some(&fragment) {
+            ui.label("copied");
+        } else {
+            hint(ui, "to share exactly this view");
+        }
+    });
+}
+
 /// A faint line under a control that lists its shortcuts.
 fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small().weak());
 }
 
 fn controls(ui: &mut egui::Ui, model: &mut Model) {
+    share_button(ui, model);
+    ui.separator();
     function_editor(ui, model);
     ui.separator();
 
@@ -601,8 +715,17 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
             .is_pointer_button_down_on();
     });
     hint(ui, "toggle: space · peek at the source grid: hold the button or X");
-    ui.add(egui::Slider::new(&mut model.homotopy, 0.0..=1.0).text("Homotopy"));
-    hint(ui, "hold F + scroll or move the mouse");
+    ui.horizontal(|ui| {
+        let slider = egui::Slider::new(&mut model.homotopy, 0.0..=1.0).text("Homotopy");
+        if ui.add(slider).changed() {
+            model.morph = Morph::Off;
+        }
+        let mut playing = model.morph != Morph::Off;
+        if ui.checkbox(&mut playing, "Animate").changed() {
+            model.toggle_morph();
+        }
+    });
+    hint(ui, "hold F + scroll or move the mouse · animate: M");
 
     ui.separator();
     ui.horizontal(|ui| {
@@ -783,6 +906,7 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
         KeyCode::KeyE => model.set_example((model.example + 1) % EXAMPLES.len()),
         KeyCode::KeyH | KeyCode::Home => model.reset_view(),
         KeyCode::KeyC => model.coloring = model.coloring.next(),
+        KeyCode::KeyM => model.toggle_morph(),
         _ => {
             if let Some(i) = COLORING_KEYS.iter().position(|&k| k == key) {
                 model.coloring = Coloring::ALL[i];
@@ -794,17 +918,12 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
 /// One finger pans, two fingers pinch to zoom. Touches that start on the
 /// control window are left to egui.
 fn touch(app: &App, model: &mut Model, touch: TouchInput) {
-    // Touch positions start at the top left with y down; the canvas is
-    // centred with y up.
-    let size = app.main_window().size_points();
-    let pos = vec2(
-        touch.position.x - size.x / 2.0,
-        size.y / 2.0 - touch.position.y,
-    );
+    // nannou already hands over canvas points (centred, y up), like `app.mouse()`.
+    let pos = touch.position;
     let ctx = app.egui_for_window(model.window);
     let on_panel = model
         .panel
-        .contains(egui::pos2(touch.position.x, touch.position.y));
+        .contains(canvas_to_egui(pos, app.main_window().size_points()));
     let index = model.touches.iter().position(|&(id, _)| id == touch.id);
     match (touch.phase, index) {
         (TouchPhase::Started, None) => {
@@ -837,6 +956,12 @@ fn touch(app: &App, model: &mut Model, touch: TouchInput) {
         }
         _ => {}
     }
+}
+
+/// Converts canvas points (centred, y up) in a window of `size` points to
+/// egui's screen points (top left, y down).
+fn canvas_to_egui(pos: Vec2, size: Vec2) -> egui::Pos2 {
+    egui::pos2(pos.x + size.x / 2.0, size.y / 2.0 - pos.y)
 }
 
 fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
@@ -1013,5 +1138,13 @@ mod tests {
         naga::valid::Validator::new(Default::default(), Default::default())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    #[test]
+    fn canvas_to_egui_flips_to_top_left() {
+        let size = vec2(390.0, 844.0);
+        assert_eq!(canvas_to_egui(Vec2::ZERO, size), egui::pos2(195.0, 422.0));
+        assert_eq!(canvas_to_egui(vec2(-195.0, 422.0), size), egui::pos2(0.0, 0.0));
+        assert_eq!(canvas_to_egui(vec2(195.0, -422.0), size), egui::pos2(390.0, 844.0));
     }
 }

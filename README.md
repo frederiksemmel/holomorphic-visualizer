@@ -1,9 +1,23 @@
 # Conformal Map Visualizer
 
-**Try it in your browser: <https://frederiksemmel.github.io/holomorphic-visualizer/>**
-(needs WebGPU: Chrome or Edge, Safari 26+, or Firefox 141+ on Windows).
+**[Open it in your browser →](https://frederiksemmel.github.io/holomorphic-visualizer/)**
 
-Built with [nannou](https://nannou.cc) 0.20 (on Bevy) and its egui integration.
+![A grid of the plane bending under exp(z) and back](web/preview.gif)
+
+Type any complex function f(z) and watch it bend a grid of the plane, live on
+the GPU, in the spirit of 3Blue1Brown's animations. Slide from the identity to
+f, drag the parameter p around, and color the lines by where they came from,
+by how much f stretches them, or by how far it turns them.
+
+The URL always holds what you're looking at, so you can share a view by
+sharing the link (there's also a **Copy link** button). For example:
+[Escher's Print Gallery](https://frederiksemmel.github.io/holomorphic-visualizer/#ex=escher),
+[exp(1/z) near its essential singularity](https://frederiksemmel.github.io/holomorphic-visualizer/#f=exp%281/z%29&grid=-1,1,-1,1&res=4&color=source&view=0,0,300),
+[the Joukowski map stretching a disk](https://frederiksemmel.github.io/holomorphic-visualizer/#ex=joukowski&color=stretch).
+
+It needs WebGPU: Chrome or Edge, Safari 26+, or Firefox 141+ on Windows. On
+Linux, Chrome needs `chrome://flags/#enable-unsafe-webgpu`. Without it, run
+the [desktop app](#development).
 
 ## Examples
 
@@ -64,6 +78,7 @@ The others: exp(p · z), p · sin z and the Joukowski map z + p / z.
 
 ## Development
 
+Built with [nannou](https://nannou.cc) 0.20 (on Bevy) and its egui integration.
 The dev environment is managed with [devenv](https://devenv.sh); enter it with
 `devenv shell`. It provides the Rust toolchain, fontconfig for building, and the
 runtime libraries (Vulkan/GL, Wayland, X11) the window needs.
@@ -74,6 +89,10 @@ The first build compiles Bevy (~590 crates), so expect a few minutes.
 cargo run --release   # run the visualizer
 cargo test            # unit tests (also: `devenv test`)
 ```
+
+The desktop app takes a link, or just its `#…` part, as its argument:
+`cargo run --release -- '#ex=escher&color=source'`. Its **Copy link** button
+copies a link to the browser version.
 
 Inside the shell, cargo is limited to 90% of the CPU cores (`CARGO_BUILD_JOBS`).
 
@@ -150,6 +169,13 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       the parameter `p`; `r` resets it to the example's value
     * hold `f` and scroll or move the mouse to blend from the identity to `f`
       (the homotopy)
+    * `m` (or the Animate box) plays the blend back and forth, as it does when
+      the visualizer opens or you pick an example; taking the homotopy in hand
+      stops it
+    * **Copy link** copies a link to exactly this view. The page URL always
+      shows it as well: the example, the formula, `p`, the grid, the coloring,
+      the view and the homotopy, written as what differs from the example.
+      Editing the `#…` part of the URL by hand works too
     * `e` steps to the next example
     * `space` toggles applying the function; hold `x` or the "Hold to show
       source" button to peek at the source grid
