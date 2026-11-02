@@ -18,7 +18,8 @@ const DOMAIN_LIMIT: f32 = 15.0;
 /// Zoom limits, in screen points per unit. Positions are f32, so panning loses
 /// about |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=1_000_000.0;
-/// Scrolling or mouse travel, in screen points, across the whole homotopy range.
+/// Scrolling or mouse travel, in screen points, across the whole homotopy range
+/// at the default zoom (see [`Model::homotopy_travel`]).
 const HOMOTOPY_TRAVEL: f32 = 300.0;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
 const MAX_DENSITY: f32 = 2048.0;
@@ -392,6 +393,15 @@ impl Model {
         }
     }
 
+    /// Screen points of scrolling or mouse travel across the whole homotopy
+    /// range. A step of the homotopy moves each point by a fixed distance in
+    /// the plane, so zoomed in by k it moves k times as far on screen: the
+    /// travel grows with the zoom to keep that motion as fast as at the
+    /// default zoom. Zoomed out it stays put, or a flick would jump from z to f.
+    fn homotopy_travel(&self) -> f32 {
+        HOMOTOPY_TRAVEL * (self.pixels_per_unit / DEFAULT_PIXELS_PER_UNIT).max(1.0)
+    }
+
     /// Moves p by `delta` screen points. p is not a point on screen, so this
     /// ignores the zoom.
     fn move_parameter(&mut self, delta: Vec2) {
@@ -596,7 +606,7 @@ fn key_gesture(
     }
     if keys.pressed(KeyCode::KeyF) {
         model.morph = Morph::Off;
-        model.homotopy = (model.homotopy + (delta.x + delta.y) / HOMOTOPY_TRAVEL).clamp(0.0, 1.0);
+        model.homotopy = (model.homotopy + (delta.x + delta.y) / model.homotopy_travel()).clamp(0.0, 1.0);
         used = true;
     }
     used
