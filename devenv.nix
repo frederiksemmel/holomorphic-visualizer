@@ -18,6 +18,8 @@ let
     fileset = lib.fileset.unions [
       ./Cargo.toml
       ./Cargo.lock
+      # Fonts the app embeds.
+      ./assets
       ./src
       ./vendor
     ];

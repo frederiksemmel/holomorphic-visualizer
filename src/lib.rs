@@ -1,9 +1,11 @@
 use num::complex::Complex;
 
+pub mod axes;
 pub mod borders;
 pub mod examples;
 pub mod expr;
 pub mod morph;
+pub mod readout;
 pub mod scene;
 
 /// Complex arithmetic for the grid shader, used by the `f` that [`expr`] generates.

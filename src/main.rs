@@ -1,13 +1,17 @@
 use bevy::asset::{Assets, uuid_handle};
 use bevy::input::{ButtonInput, mouse::MouseScrollUnit, touch::TouchPhase};
+use bevy::platform::time::Instant;
+use conformal_visualizer::axes::Step;
 use conformal_visualizer::borders::{self, Border};
 use conformal_visualizer::examples::EXAMPLES;
 use conformal_visualizer::expr::{self, Function, ParseError};
 use conformal_visualizer::scene::{Coloring, DEFAULT_PIXELS_PER_UNIT, DEFAULT_RESOLUTION, Scene};
-use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph};
+use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph, readout};
 use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
 use num::Complex;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Points per scroll "line" for mice that report wheel clicks instead of pixels.
 const POINTS_PER_LINE: f32 = 24.0;
@@ -53,6 +57,48 @@ const STRETCH_OCTAVES: f32 = 2.0;
 /// may rewrite its URL (Safari to 100 times in 30 s), and a slider drag
 /// changes the scene every frame.
 const LINK_INTERVAL: f32 = 0.4;
+/// The background grid of the plane: major lines about this many screen
+/// points apart, at a step of 1, 2 or 5 times a power of ten.
+const MAJOR_SPACING: f64 = 120.0;
+/// Its lines, as grays (sRGB) on the background (0.02). Opaque rather than
+/// translucent, so crossings don't add up to dots.
+const MINOR_GRAY: f32 = 0.055;
+const MAJOR_GRAY: f32 = 0.085;
+const AXIS_GRAY: f32 = 0.14;
+/// In screen points.
+const PLANE_LINE_WIDTH: f32 = 1.0;
+/// The numbers on its axes: size in points, color, distance from the axis,
+/// and from the window edge when the axis is off screen.
+const LABEL_SIZE: f32 = 11.0;
+const LABEL_COLOR: egui::Color32 = egui::Color32::from_gray(100);
+const LABEL_GAP: f32 = 4.0;
+const LABEL_MARGIN: f32 = 4.0;
+/// The hover readout shows once the cursor has rested this long.
+const READOUT_DELAY: Duration = Duration::from_millis(500);
+/// The app wakes this much after the readout is due, and shows it this
+/// much before: the wake-up is timed from the start of the frame that
+/// sets it, a little before `update` reads the clock.
+const WAKE_SLACK: Duration = Duration::from_millis(20);
+/// Most source points the readout lists.
+const READOUT_SOURCES: usize = 3;
+/// How close, in screen points, the image of a source point must come to
+/// the cursor.
+const READOUT_TOLERANCE: f32 = 0.25;
+/// Text size of the readout card, in points.
+const READOUT_SIZE: f32 = 14.0;
+/// Its corner sits this many points from the cursor.
+const READOUT_OFFSET: f32 = 18.0;
+/// Dots at the cursor and at the source points, and the lines that join
+/// them: radii and width in points.
+const MARK_COLOR: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(255, 255, 255, 110);
+const LINK_COLOR: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(255, 255, 255, 45);
+const CURSOR_MARK_RADIUS: f32 = 2.0;
+const SOURCE_MARK_RADIUS: f32 = 2.5;
+const LINK_WIDTH: f32 = 1.0;
+/// Fonts for the axis numbers and the readout (assets/fonts, SIL OFL):
+/// KaTeX's upright and italic, the look of typeset math.
+const MATH_FONT: &str = "math";
+const MATH_ITALIC_FONT: &str = "math italic";
 /// Where the browser version lives; links copied in the desktop app point there.
 #[cfg(not(target_arch = "wasm32"))]
 const WEB_URL: &str = "https://frederiksemmel.github.io/holomorphic-visualizer/";
@@ -221,6 +267,18 @@ enum Drag {
     Grid,
 }
 
+/// Where the cursor came to rest, for the hover readout.
+struct Rest {
+    /// Cursor position (canvas points) when it last moved.
+    at: Vec2,
+    /// When it last moved, or something else (a scroll, a key, a button)
+    /// happened that the readout should wait out.
+    since: Instant,
+    /// The last thing to move the pointer was a finger: touch screens have
+    /// no hover, so there is no readout.
+    touch: bool,
+}
+
 struct Model {
     window: Entity,
     /// Index into `EXAMPLES`: the last one picked.
@@ -254,6 +312,9 @@ struct Model {
     link_copied: Option<String>,
     /// Redrawing every frame (animating, or a URL update is due) rather than on input.
     continuous: bool,
+    /// When the app is set to wake up without input, to show the readout.
+    wake_at: Option<Instant>,
+    rest: Rest,
     /// Mouse button held on the canvas, what it does, and the cursor position
     /// at the last update.
     drag: Option<(MouseButton, Drag, Vec2)>,
@@ -660,6 +721,12 @@ fn model(app: &App) -> Model {
         link_written: (fragment.clone(), f32::NEG_INFINITY),
         link_copied: None,
         continuous: false,
+        wake_at: None,
+        rest: Rest {
+            at: Vec2::ZERO,
+            since: Instant::now(),
+            touch: false,
+        },
         drag: None,
         space_tap: false,
         scrolled_border: None,
@@ -680,7 +747,9 @@ fn model(app: &App) -> Model {
 
 /// Plays the animation, keeps the page URL showing the scene, and redraws
 /// every frame only while either needs it or a key is `steering` something.
-fn animate(app: &App, model: &mut Model, steering: bool) {
+/// Otherwise the app waits for input, or until `wake_at` if that comes first,
+/// when the hover readout is due.
+fn animate(app: &App, model: &mut Model, steering: bool, wake_at: Option<Instant>) {
     let now = app.time();
     match model.morph {
         Morph::Off => {}
@@ -700,12 +769,17 @@ fn animate(app: &App, model: &mut Model, steering: bool) {
     }
 
     let continuous = model.morph != Morph::Off || link_due || steering;
-    if continuous != model.continuous {
+    let wake_at = wake_at.filter(|_| !continuous);
+    // Only on a change: Bevy redraws once more whenever the mode changes.
+    if continuous != model.continuous || wake_at != model.wake_at {
         model.continuous = continuous;
-        app.set_update_mode(if continuous {
-            UpdateMode::Continuous
-        } else {
-            UpdateMode::wait()
+        model.wake_at = wake_at;
+        app.set_update_mode(match wake_at {
+            _ if continuous => UpdateMode::Continuous,
+            Some(at) => {
+                UpdateMode::reactive(at.saturating_duration_since(Instant::now()) + WAKE_SLACK)
+            }
+            None => UpdateMode::wait(),
         });
     }
 }
@@ -714,6 +788,12 @@ fn update(app: &App, model: &mut Model) {
     let ctx = app.egui_for_window(model.window);
     let window = app.window_rect();
     model.half_view = 0.5 * vec2(window.w(), window.h());
+    // They take effect from the next frame on.
+    let math_fonts = has_math_fonts(&ctx);
+    if !math_fonts {
+        add_math_fonts(&ctx);
+        ctx.request_repaint();
+    }
 
     // Space plays and pauses (when let go, below), so it must not also click
     // the button or checkbox that has keyboard focus, as egui would.
@@ -811,7 +891,91 @@ fn update(app: &App, model: &mut Model) {
     }
     let modifiers = ctx.input(|i| i.modifiers);
     mouse_drag(app, model, &keys, modifiers, over_ui);
-    animate(app, model, steer != 0.0);
+    let hover = hover(app, &ctx, model, &keys, over_ui);
+    let wake_at = match hover {
+        Hover::Due(at) => Some(at),
+        _ => None,
+    };
+    animate(app, model, steer != 0.0, wake_at);
+    if math_fonts {
+        axis_labels(&ctx, model);
+        if let Hover::Shown(cursor) = hover {
+            show_readout(&ctx, model, cursor);
+        }
+    }
+}
+
+/// The hover readout: what landed under the cursor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Hover {
+    Hidden,
+    /// The cursor is resting; the readout shows at this time.
+    Due(Instant),
+    /// For the cursor here, in canvas points.
+    Shown(Vec2),
+}
+
+/// Keys that scrub, pan or move something while held: the readout waits
+/// until they are let go.
+const GESTURE_KEYS: [KeyCode; 9] = [
+    KeyCode::Space,
+    KeyCode::KeyW,
+    KeyCode::KeyA,
+    KeyCode::KeyS,
+    KeyCode::KeyD,
+    KeyCode::KeyP,
+    KeyCode::KeyF,
+    KeyCode::ArrowLeft,
+    KeyCode::ArrowRight,
+];
+
+/// The readout shows once the cursor has rested on the canvas, not over the
+/// control window (`over_ui`), for `READOUT_DELAY` with no button, gesture
+/// key or modifier down and nothing scrolled (see `mouse_wheel`).
+fn hover(
+    app: &App,
+    ctx: &egui::Context,
+    model: &mut Model,
+    keys: &ButtonInput<KeyCode>,
+    over_ui: bool,
+) -> Hover {
+    let now = Instant::now();
+    // egui's idea of the cursor, which also knows when it has left the window.
+    let Some(cursor) = pointer(ctx, model) else {
+        // Coming back into the window counts as a move.
+        model.rest.since = now;
+        return Hover::Hidden;
+    };
+    let rest = &mut model.rest;
+    if cursor != rest.at {
+        rest.at = cursor;
+        rest.since = now;
+        // A finger may move the cursor too; see `touch`.
+        if model.touches.is_empty() {
+            rest.touch = false;
+        }
+    }
+    let modifiers = ctx.input(|i| i.modifiers);
+    let busy = app.mouse_buttons().get_pressed().next().is_some()
+        || model.drag.is_some()
+        || !model.touches.is_empty()
+        || modifiers.shift
+        || modifiers.ctrl
+        || modifiers.alt
+        || modifiers.command
+        || (!ctx.text_edit_focused() && GESTURE_KEYS.iter().any(|&key| keys.pressed(key)));
+    if busy {
+        rest.since = now;
+    }
+    if over_ui || rest.touch {
+        return Hover::Hidden;
+    }
+    let due = rest.since + READOUT_DELAY;
+    if now + WAKE_SLACK >= due {
+        Hover::Shown(cursor)
+    } else {
+        Hover::Due(due)
+    }
 }
 
 /// Left-drag moves the grid border drawn nearest the cursor (with Ctrl too,
@@ -1034,6 +1198,7 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     });
     hint(ui, "zoom: ctrl + scroll (around the cursor)");
     hint(ui, "pan: drag or scroll · reset view: H");
+    hint(ui, "rest the cursor to see what landed under it");
 
     ui.separator();
     ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_UI_RESOLUTION).text("Resolution"));
@@ -1219,6 +1384,12 @@ fn touch(app: &App, model: &mut Model, touch: TouchInput) {
     // nannou already hands over canvas points (centred, y up), like `app.mouse()`.
     let pos = touch.position;
     let ctx = app.egui_for_window(model.window);
+    // No readout until the mouse moves: a finger may have moved the cursor.
+    model.rest = Rest {
+        at: pointer(&ctx, model).unwrap_or(model.rest.at),
+        since: Instant::now(),
+        touch: true,
+    };
     let on_panel = model
         .panel
         .contains(canvas_to_egui(pos, app.main_window().size_points()));
@@ -1262,7 +1433,20 @@ fn canvas_to_egui(pos: Vec2, size: Vec2) -> egui::Pos2 {
     egui::pos2(pos.x + size.x / 2.0, size.y / 2.0 - pos.y)
 }
 
+/// The inverse of `canvas_to_egui`.
+fn egui_to_canvas(pos: egui::Pos2, size: Vec2) -> Vec2 {
+    vec2(pos.x - size.x / 2.0, size.y / 2.0 - pos.y)
+}
+
+/// Where egui sees the cursor, in canvas points; `None` outside the window.
+fn pointer(ctx: &egui::Context, model: &Model) -> Option<Vec2> {
+    let pos = ctx.pointer_hover_pos()?;
+    Some(egui_to_canvas(pos, 2.0 * model.half_view))
+}
+
 fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
+    // The readout hides and waits for the scrolling to stop.
+    model.rest.since = Instant::now();
     let ctx = app.egui_for_window(model.window);
     if ctx.is_pointer_over_egui() || ctx.text_edit_focused() {
         return;
@@ -1338,18 +1522,7 @@ fn to_screen(model: &Model, z: Complex<f32>) -> Vec2 {
 fn view(app: &App, model: &Model) {
     let draw = app.draw();
     draw.background().srgb(0.02, 0.02, 0.02);
-
-    // Coordinate axes from -1 to 1.
-    let ppu = model.pixels_per_unit;
-    for (start, end) in [((-1.0, 0.0), (1.0, 0.0)), ((0.0, -1.0), (0.0, 1.0))] {
-        draw.arrow()
-            .weight(1.0)
-            .head_length(0.1 * ppu)
-            .head_width(0.05 * ppu)
-            .color(GRAY)
-            .start(to_screen(model, Complex::new(start.0, start.1)))
-            .end(to_screen(model, Complex::new(end.0, end.1)));
-    }
+    plane_grid(&draw, model);
 
     let layout = model.grid_layout();
     let domain = model.full_layout();
@@ -1379,6 +1552,299 @@ fn view(app: &App, model: &Model) {
     let grid = draw.shader_model(GridShader { params });
     let quad = grid.mesh().indexed([Vec3::ZERO; 4], [0, 1, 2, 2, 1, 3]);
     grid.instanced().primitive(quad).range(0..segments);
+}
+
+/// The background grid of the plane, under the mapped grid: faint minor
+/// lines, major lines at a 1·2·5 step about `MAJOR_SPACING` points apart, and
+/// the axes. Its numbers are drawn by `axis_labels`.
+fn plane_grid(draw: &Draw, model: &Model) {
+    let ppu = model.pixels_per_unit as f64;
+    let major = Step::near(MAJOR_SPACING, ppu);
+    let divisions = major.minor_divisions();
+    let minor = major.value() / divisions as f64;
+    let half = model.half_view;
+    // In f64: far zoomed in, f32 rounding would shift lines by up to a pixel.
+    let lines = |offset: f32, half: f32| {
+        let (offset, reach) = (offset as f64, half as f64 / ppu);
+        Step::lines(minor, -reach - offset, reach - offset)
+            .map(move |k| (k, ((k as f64 * minor + offset) * ppu) as f32))
+    };
+    let level_of = |k: i64| match k {
+        0 => 2,
+        _ if k % divisions == 0 => 1,
+        _ => 0,
+    };
+    // Minor lines first and the axes last, so the stronger lines cross on top.
+    for (level, gray) in [MINOR_GRAY, MAJOR_GRAY, AXIS_GRAY].into_iter().enumerate() {
+        for (k, x) in lines(model.position.x, half.x) {
+            if level_of(k) == level {
+                let line = draw.line().start(vec2(x, -half.y)).end(vec2(x, half.y));
+                line.weight(PLANE_LINE_WIDTH).srgb(gray, gray, gray);
+            }
+        }
+        for (k, y) in lines(model.position.y, half.y) {
+            if level_of(k) == level {
+                let line = draw.line().start(vec2(-half.x, y)).end(vec2(half.x, y));
+                line.weight(PLANE_LINE_WIDTH).srgb(gray, gray, gray);
+            }
+        }
+    }
+}
+
+/// The math fonts are loaded; egui panics on text in a family it lacks.
+fn has_math_fonts(ctx: &egui::Context) -> bool {
+    let family = egui::FontFamily::Name(MATH_FONT.into());
+    ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family))
+}
+
+/// Adds KaTeX's fonts as two families of their own, upright and italic,
+/// keeping egui's fonts (and so the control window) as they are.
+fn add_math_fonts(ctx: &egui::Context) {
+    let mut fonts = ctx.fonts(|fonts| fonts.definitions().clone());
+    for (name, data) in [
+        (
+            "KaTeX_Main-Regular",
+            &include_bytes!("../assets/fonts/KaTeX_Main-Regular.ttf")[..],
+        ),
+        (
+            "KaTeX_Math-Italic",
+            &include_bytes!("../assets/fonts/KaTeX_Math-Italic.ttf")[..],
+        ),
+    ] {
+        let data = Arc::new(egui::FontData::from_static(data));
+        fonts.font_data.insert(name.to_owned(), data);
+    }
+    // Glyphs KaTeX lacks, like ·, come from egui's own fonts.
+    let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
+    for (family, names) in [
+        (MATH_FONT, &["KaTeX_Main-Regular"][..]),
+        (
+            MATH_ITALIC_FONT,
+            &["KaTeX_Math-Italic", "KaTeX_Main-Regular"],
+        ),
+    ] {
+        let names = names.iter().map(|&name| name.to_owned());
+        fonts.families.insert(
+            egui::FontFamily::Name(family.into()),
+            names.chain(fallback.iter().cloned()).collect(),
+        );
+    }
+    ctx.set_fonts(fonts);
+}
+
+fn math_font(size: f32, italic: bool) -> egui::FontId {
+    let family = if italic { MATH_ITALIC_FONT } else { MATH_FONT };
+    egui::FontId::new(size, egui::FontFamily::Name(family.into()))
+}
+
+/// Where the plane point `z` is on screen, in egui's points.
+fn plane_to_egui(model: &Model, z: Complex<f32>) -> egui::Pos2 {
+    canvas_to_egui(to_screen(model, z), 2.0 * model.half_view)
+}
+
+/// Numbers on the axes of the background grid, at its major lines: real
+/// values on the real axis, multiples of i on the imaginary one, 0 once at
+/// the origin. An axis off screen keeps its numbers at that edge of the
+/// window. Numbers that would land on the control window or on each other
+/// are left out.
+fn axis_labels(ctx: &egui::Context, model: &Model) {
+    let painter = ctx.layer_painter(egui::LayerId::background());
+    let ppu = model.pixels_per_unit as f64;
+    let step = Step::near(MAJOR_SPACING, ppu);
+    let size = 2.0 * model.half_view;
+    let (position, half) = (model.position, model.half_view);
+    // In f64, as in `plane_grid`.
+    let x_at = |x: f64| ((x + position.x as f64) * ppu) as f32 + half.x;
+    let y_at = |y: f64| half.y - ((y + position.y as f64) * ppu) as f32;
+    let visible = |offset: f32, half: f32| {
+        let (offset, reach) = (offset as f64, half as f64 / ppu);
+        Step::lines(step.value(), -reach - offset, reach - offset)
+    };
+    let (axis_x, axis_y) = (x_at(0.0), y_at(0.0));
+    let real_pinned = !(0.0..=size.y).contains(&axis_y);
+    let imaginary_pinned = !(0.0..=size.x).contains(&axis_x);
+
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.x, size.y));
+    let mut taken = vec![model.panel];
+    let mut label = |text: String, place: &dyn Fn(egui::Vec2) -> egui::Pos2| {
+        let mut math = MathText::new(LABEL_SIZE);
+        math.math(&text, LABEL_COLOR);
+        let galley = painter.layout_job(math.job);
+        let rect = egui::Rect::from_min_size(place(galley.size()), galley.size());
+        if window.contains_rect(rect) && taken.iter().all(|other| !other.intersects(rect)) {
+            painter.galley(rect.min, galley, LABEL_COLOR);
+            taken.push(rect);
+        }
+    };
+    // Below the real axis, centred; left of the imaginary one. Kept inside
+    // the window, which pins them to its edge when their axis is off screen.
+    let below = |x: f32| {
+        move |label: egui::Vec2| {
+            let bottom = size.y - LABEL_MARGIN - label.y;
+            let top = (axis_y + LABEL_GAP).min(bottom).max(LABEL_MARGIN);
+            egui::pos2(x - label.x / 2.0, top)
+        }
+    };
+    let left_of = |y: f32| {
+        move |label: egui::Vec2| {
+            let right = size.x - LABEL_MARGIN - label.x;
+            let left = (axis_x - LABEL_GAP - label.x).min(right).max(LABEL_MARGIN);
+            egui::pos2(left, y - label.y / 2.0)
+        }
+    };
+    if !real_pinned && !imaginary_pinned {
+        label("0".to_owned(), &|label| {
+            egui::pos2(axis_x - LABEL_GAP - label.x, axis_y + LABEL_GAP)
+        });
+    }
+    // 0 on an axis only when it is pinned: there it is a coordinate, not the origin.
+    for k in visible(position.x, half.x) {
+        if k != 0 || real_pinned {
+            label(step.real_label(k), &below(x_at(k as f64 * step.value())));
+        }
+    }
+    for k in visible(position.y, half.y) {
+        if k != 0 || imaginary_pinned {
+            let y = y_at(k as f64 * step.value());
+            label(step.imaginary_label(k), &left_of(y));
+        }
+    }
+}
+
+/// Text set like math, in the KaTeX fonts: letters (variables, and i) in
+/// italics, numbers and signs upright, and words upright.
+struct MathText {
+    job: egui::text::LayoutJob,
+    size: f32,
+}
+
+impl MathText {
+    fn new(size: f32) -> Self {
+        let job = egui::text::LayoutJob::default();
+        MathText { job, size }
+    }
+
+    fn append(&mut self, text: &str, italic: bool, color: egui::Color32) {
+        let format = egui::TextFormat::simple(math_font(self.size, italic), color);
+        self.job.append(text, 0.0, format);
+    }
+
+    /// `text` as math: each run of letters in italics.
+    fn math(&mut self, text: &str, color: egui::Color32) {
+        let mut start = 0;
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        for (n, &(i, c)) in chars.iter().enumerate() {
+            let italic = c.is_ascii_alphabetic();
+            let ends = chars
+                .get(n + 1)
+                .is_none_or(|&(_, next)| next.is_ascii_alphabetic() != italic);
+            if ends {
+                self.append(&text[start..i + c.len_utf8()], italic, color);
+                start = i + c.len_utf8();
+            }
+        }
+    }
+
+    fn words(&mut self, text: &str, color: egui::Color32) {
+        self.append(text, false, color);
+    }
+}
+
+/// The point w under the cursor (`cursor`, canvas points) and the points z
+/// of the grid that landed there, with how much f stretches and turns near
+/// each: a card by the cursor, and dots at w and at each z, joined by lines.
+fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
+    let ppu = model.pixels_per_unit;
+    let w = complex(cursor / ppu - model.position);
+    let t = model.blend();
+    let (min, max) = model.domain();
+    let (sources, count) = if t == 0.0 {
+        let inside = (min.re..=max.re).contains(&w.re) && (min.im..=max.im).contains(&w.im);
+        (if inside { vec![w] } else { Vec::new() }, inside as usize)
+    } else {
+        // Not finer than f32 can tell apart near w.
+        let tolerance = (READOUT_TOLERANCE / ppu).max(8.0 * f32::EPSILON * w.norm().max(1.0));
+        let map = |z| model.map(z);
+        let derivative = |z| model.map_derivative(z);
+        readout::preimages(map, derivative, (min, max), w, tolerance, READOUT_SOURCES)
+    };
+
+    let visuals = &ctx.global_style().visuals;
+    let (strong, weak) = (visuals.text_color(), visuals.weak_text_color());
+    let mut text = MathText::new(READOUT_SIZE);
+    let magnitude = |z: Complex<f32>| z.re.abs().max(z.im.abs());
+    text.math(
+        match t {
+            0.0 => "z = ",
+            1.0 => "f(z) = ",
+            _ => "w = ",
+        },
+        strong,
+    );
+    let decimals = readout::decimals(ppu, magnitude(w));
+    text.math(&readout::complex(w, decimals), strong);
+    if t != 0.0 && t != 1.0 {
+        text.words("   at ", weak);
+        text.math(&format!("t = {t:.2}"), weak);
+    }
+    for &z in &sources {
+        if t != 0.0 {
+            // As finely as one screen point at w tells apart near z.
+            let points_per_unit = ppu * model.map_derivative(z).norm();
+            let decimals = readout::decimals(points_per_unit, magnitude(z));
+            text.math(&format!("\nz = {}", readout::complex(z, decimals)), strong);
+        }
+        let df = model.function.derivative(z, model.parameter);
+        if df.re.is_finite() && df.im.is_finite() {
+            text.words("\n    stretch ", weak);
+            text.math(&format!("×{}", readout::significant(df.norm())), weak);
+            text.words(", turn ", weak);
+            text.math(&readout::degrees(df.arg()), weak);
+        }
+    }
+    if sources.is_empty() {
+        text.words("\nnothing from the grid lands here", weak);
+    } else if count > sources.len() {
+        text.words(&format!("\nand {} more", count - sources.len()), weak);
+    }
+
+    let painter = ctx.layer_painter(egui::LayerId::background());
+    let at = canvas_to_egui(cursor, 2.0 * model.half_view);
+    if t != 0.0 {
+        for &z in &sources {
+            let source = plane_to_egui(model, z);
+            painter.line_segment([source, at], egui::Stroke::new(LINK_WIDTH, LINK_COLOR));
+            painter.circle_filled(source, SOURCE_MARK_RADIUS, MARK_COLOR);
+        }
+    }
+    painter.circle_filled(at, CURSOR_MARK_RADIUS, MARK_COLOR);
+
+    // To the side of the cursor away from the nearer window edges: left of
+    // it in the right half, below it in the top half. The pivot is the
+    // card's corner nearest the cursor.
+    let (left, below) = (cursor.x > 0.0, cursor.y > 0.0);
+    let pivot = match (left, below) {
+        (true, true) => egui::Align2::RIGHT_TOP,
+        (true, false) => egui::Align2::RIGHT_BOTTOM,
+        (false, true) => egui::Align2::LEFT_TOP,
+        (false, false) => egui::Align2::LEFT_BOTTOM,
+    };
+    let toward = egui::vec2(
+        if left { -1.0 } else { 1.0 },
+        if below { 1.0 } else { -1.0 },
+    );
+    let offset = READOUT_OFFSET * toward;
+    egui::Area::new(egui::Id::new("hover readout"))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .constrain(true)
+        .pivot(pivot)
+        .fixed_pos(at + offset)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.add(egui::Label::new(text.job).wrap_mode(egui::TextWrapMode::Extend));
+            });
+        });
 }
 
 /// A square pad for dragging a complex value within `[-range, range]²`.
@@ -1467,5 +1933,7 @@ mod tests {
         assert_eq!(canvas_to_egui(Vec2::ZERO, size), egui::pos2(195.0, 422.0));
         assert_eq!(canvas_to_egui(vec2(-195.0, 422.0), size), egui::pos2(0.0, 0.0));
         assert_eq!(canvas_to_egui(vec2(195.0, -422.0), size), egui::pos2(390.0, 844.0));
+        let pos = vec2(-12.5, 100.0);
+        assert_eq!(egui_to_canvas(canvas_to_egui(pos, size), size), pos);
     }
 }
