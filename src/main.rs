@@ -36,6 +36,8 @@ const SCROLL_PER_SQUARE: f32 = DEFAULT_PIXELS_PER_UNIT / (1 << DEFAULT_RESOLUTIO
 /// At most this many squares per scroll event, so a flick doesn't throw the
 /// border across the plane.
 const MAX_SCROLL_SQUARES: f32 = 4.0;
+/// Shift slows dragging p (on its pad or with the right button) to this.
+const FINE: f32 = 0.2;
 /// Largest move of the whole grid per Alt + drag or scroll event, in grid units.
 const MAX_GRID_STEP: f32 = 1.0;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
@@ -863,7 +865,7 @@ fn mouse_drag(
     let delta = mouse - from;
     match drag {
         Drag::Pan => model.position += delta / model.pixels_per_unit,
-        Drag::Parameter => model.move_parameter(delta),
+        Drag::Parameter => model.move_parameter(delta * if modifiers.shift { FINE } else { 1.0 }),
         Drag::HeldBorder => model.drag_held_border(delta),
         Drag::Grid => model.move_grid(mouse, delta),
         Drag::Resolution => model.refine(delta.x + delta.y),
@@ -1084,7 +1086,8 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
         );
     });
     xy_pad(ui, &mut model.parameter, 3.0);
-    hint(ui, "drag the pad or right-drag the canvas · reset: R");
+    hint(ui, "drag the pad or right-drag the canvas, shift: 5× finer");
+    hint(ui, "reset: R");
     hint(ui, "hold P + scroll or move the mouse");
 
     ui.separator();
@@ -1386,10 +1389,19 @@ fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) {
     let rect = response.rect;
     let visuals = ui.style().interact(&response);
 
-    if let Some(pos) = response.interact_pointer_pos() {
+    // Pressing puts the value under the pointer; dragging then moves it by
+    // the pointer's motion, so that with Shift (finer) it can lag behind
+    // without jumping back when Shift comes up.
+    let shift = ui.input(|i| i.modifiers.shift);
+    let pressed = response.is_pointer_button_down_on() && ui.input(|i| i.pointer.any_pressed());
+    if let Some(pos) = response.interact_pointer_pos().filter(|_| pressed && !shift) {
         let t = (pos - rect.min) / rect.size();
         value.re = egui::lerp(-range..=range, t.x.clamp(0.0, 1.0));
         value.im = egui::lerp(range..=-range, t.y.clamp(0.0, 1.0));
+    } else if response.dragged() {
+        let speed = if shift { FINE } else { 1.0 };
+        let delta = response.drag_delta() * 2.0 * range / rect.width() * speed;
+        *value += Complex::new(delta.x, -delta.y);
     }
 
     painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);

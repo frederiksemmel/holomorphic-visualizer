@@ -173,7 +173,9 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       the key: `ctrl + a + scroll` and `ctrl + space` work the same, and the
       touchpad stays on. This goes for `p` and `f` below too
     * hold `p` and scroll or move the mouse, or right-drag the canvas, to move
-      the parameter `p`; `r` resets it to the example's value
+      the parameter `p`; `r` resets it to the example's value. Dragging it on
+      its pad in the panel or with the right button, `shift` moves it 5×
+      finer
     * blend from the identity to `f` (the homotopy) with `←` / `→`,
       `space + scroll`, or holding `f` and scrolling or moving
       the mouse
