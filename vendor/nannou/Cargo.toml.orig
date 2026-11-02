@@ -1,0 +1,118 @@
+[package]
+name = "nannou"
+version.workspace = true
+authors = ["mitchmindtree <mitchell.nordine@gmail.com>"]
+description = "A Creative Coding Framework for Rust."
+readme = "README.md"
+keywords = ["creative", "sketch", "graphics", "audio"]
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy = { workspace = true, default-features = false, features = [
+    "bevy_log",
+    "bevy_post_process",
+    "bevy_window",
+    "bevy_winit",
+]}
+# `bevy-inspector-egui` has no Bevy 0.19 release yet - kept disabled (see the
+# `inspector` feature below and the RC -> stable tracking issue).
+#bevy-inspector-egui = { workspace = true, optional = true }
+bevy_egui = { workspace = true, optional = true }
+nannou_derive = { workspace = true }
+nannou_draw = { workspace = true }
+nannou_video = { workspace = true, optional = true }
+find_folder = { workspace = true }
+lyon = { workspace = true }
+nannou_core = { workspace = true, features = ["std"] }
+nannou_wgpu = { workspace = true, features = ["capturer"] }
+noise = { workspace = true }
+pennereq = { workspace = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+walkdir = { workspace = true }
+wgpu = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["full"]}
+image = { workspace = true, features = ["default"] }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { workspace = true, features = ["webgpu"] }
+tokio = { version = "1", features = ["rt"]}
+image = { workspace = true, features = [] }
+
+[dev-dependencies]
+# Only needed by `tests/shader_model_tests.rs`: the `#[shader_model]` expansion
+# references `::bevy::*` paths, so the test crate needs `bevy` in scope.
+bevy = { workspace = true }
+
+[features]
+default = [
+    "jpeg",
+    "multi_threaded",
+    "notosans",
+    "png",
+    "system_font_discovery",
+    # Both Linux window backends, matching bevy's defaults - the appropriate
+    # one is selected at runtime.
+    "wayland",
+    "x11",
+    "webgl2",
+]
+# `immutable_ctx` lets nannou read the egui context through `&self` (the classic `app.egui()`
+# returns a cheap `egui::Context` handle), matching nannou's imperative single-pass UI usage.
+egui = ["dep:bevy_egui", "bevy_egui/immutable_ctx"]
+# TODO: re-enable once `bevy-inspector-egui` supports Bevy 0.19.
+#inspector = ["egui", "dep:bevy-inspector-egui"]
+hot_reload = ["bevy/file_watcher", "bevy/multi_threaded"]
+nightly = ["nannou_draw/nightly"]
+# Bundle Noto Sans as the default font, for deterministic rendering across
+# machines regardless of installed system fonts.
+notosans = ["nannou_draw/notosans"]
+# Discover fonts installed on the system, making them available to
+# `draw.text().font(..)` by family name.
+system_font_discovery = ["nannou_draw/system_font_discovery"]
+serde = ["dep:serde", "toml", "serde_json", "nannou_core/serde"]
+video = ["nannou_video"]
+
+# The features below re-expose bevy features so that they can be controlled
+# from a `nannou` dependency alone. Any other bevy feature can be enabled by
+# depending on `bevy` directly - cargo features are additive across the graph.
+
+# Run bevy's task pools across multiple threads. Native only - wasm builds
+# are always single-threaded.
+multi_threaded = ["bevy/multi_threaded"]
+
+# Tracing spans for profiling, e.g. `trace_tracy` for the Tracy profiler.
+trace = ["bevy/trace"]
+trace_chrome = ["bevy/trace_chrome"]
+trace_tracy = ["bevy/trace_tracy"]
+
+# Linux window backends.
+wayland = ["bevy/wayland"]
+x11 = ["bevy/x11"]
+
+# Fall back to WebGL2 on wasm when WebGPU is unavailable.
+webgl2 = ["bevy/webgl2"]
+
+# Image formats supported when loading textures via the asset server,
+# e.g. `app.asset_server().load("texture.png")`.
+basis-universal = ["bevy/basis-universal"]
+bmp = ["bevy/bmp"]
+dds = ["bevy/dds"]
+exr = ["bevy/exr"]
+ff = ["bevy/ff"]
+gif = ["bevy/gif"]
+hdr = ["bevy/hdr"]
+ico = ["bevy/ico"]
+jpeg = ["bevy/jpeg"]
+ktx2 = ["bevy/ktx2"]
+png = ["bevy/png"]
+pnm = ["bevy/pnm"]
+qoi = ["bevy/qoi"]
+tga = ["bevy/tga"]
+tiff = ["bevy/tiff"]
+webp = ["bevy/webp"]

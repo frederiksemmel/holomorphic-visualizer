@@ -3690,8 +3690,6 @@ dependencies = [
 [[package]]
 name = "nannou"
 version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b6bb89224f323c5219f63eb4bade2b21662926893f9015b83fca828ac7e5401"
 dependencies = [
  "bevy",
  "bevy_egui",
