@@ -11,7 +11,7 @@ cargo build --profile web --target wasm32-unknown-unknown --bin conformal-visual
 rm -rf "$out"
 mkdir -p "$out"
 wasm-bindgen --target web --no-typescript --out-dir "$out" --out-name app \
-  target/wasm32-unknown-unknown/web/conformal-visualizer.wasm
+  "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/web/conformal-visualizer.wasm"
 if command -v wasm-opt >/dev/null; then
   # Features come from the target_features section that rustc emits.
   wasm-opt -Os --strip-debug --strip-producers -o "$out/app_bg.wasm" "$out/app_bg.wasm"
