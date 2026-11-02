@@ -1,5 +1,5 @@
 use bevy::asset::{Assets, uuid_handle};
-use bevy::input::{ButtonInput, mouse::MouseScrollUnit};
+use bevy::input::{ButtonInput, mouse::MouseScrollUnit, touch::TouchPhase};
 use conformal_visualizer::expr::{self, ParseError};
 use conformal_visualizer::{COMPLEX_WGSL, GridLayout};
 use nannou::prelude::render::ShaderModel;
@@ -255,6 +255,10 @@ struct Model {
     peek: bool,
     /// Cursor position at the last update, for key + mouse-move gestures.
     last_mouse: Vec2,
+    /// Fingers on the canvas (by touch id) and where they were last seen.
+    touches: Vec<(u64, Vec2)>,
+    /// Screen area of the control window, in points from the top left.
+    panel: egui::Rect,
 }
 
 impl Model {
@@ -341,11 +345,15 @@ fn model(app: &App) -> Model {
     let window = app
         .new_window()
         .primary()
-        .title("Conformal Map Visualizer")
-        .size(1200, 800)
+        .title("Conformal Map Visualizer");
+    // On the web the page's CSS sizes the canvas to the viewport.
+    #[cfg(not(target_arch = "wasm32"))]
+    let window = window.size(1200, 800);
+    let window = window
         .view(view)
         .key_pressed(key_pressed)
         .mouse_wheel(mouse_wheel)
+        .touch(touch)
         .build();
     // Only redraw on input; the picture is static otherwise.
     app.set_update_mode(UpdateMode::wait());
@@ -374,16 +382,25 @@ fn model(app: &App) -> Model {
         peek_button: false,
         peek: false,
         last_mouse: Vec2::ZERO,
+        touches: Vec::new(),
+        panel: egui::Rect::NOTHING,
     }
 }
 
 fn update(app: &App, model: &mut Model) {
     let ctx = app.egui_for_window(model.window);
 
-    egui::Window::new("Conformal Map")
+    // Phones get the canvas first; the panel opens from its title bar.
+    let wide = ctx.content_rect().width() > 700.0;
+    let panel = egui::Window::new("Conformal Map")
         .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
         .resizable(false)
+        .default_open(wide)
+        .vscroll(true)
         .show(&ctx, |ui| controls(ui, model));
+    if let Some(panel) = panel {
+        model.panel = panel.response.rect;
+    }
     if let Some(body) = model.new_function.take() {
         app.command_scope(|mut commands| {
             commands.queue(move |world: &mut World| set_grid_shader(world, &body));
@@ -704,6 +721,54 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
                 model.coloring = Coloring::ALL[i];
             }
         }
+    }
+}
+
+/// One finger pans, two fingers pinch to zoom. Touches that start on the
+/// control window are left to egui.
+fn touch(app: &App, model: &mut Model, touch: TouchInput) {
+    // Touch positions start at the top left with y down; the canvas is
+    // centred with y up.
+    let size = app.main_window().size_points();
+    let pos = vec2(
+        touch.position.x - size.x / 2.0,
+        size.y / 2.0 - touch.position.y,
+    );
+    let ctx = app.egui_for_window(model.window);
+    let on_panel = model
+        .panel
+        .contains(egui::pos2(touch.position.x, touch.position.y));
+    let index = model.touches.iter().position(|&(id, _)| id == touch.id);
+    match (touch.phase, index) {
+        (TouchPhase::Started, None) => {
+            if !on_panel && !ctx.egui_wants_pointer_input() {
+                model.touches.push((touch.id, pos));
+            }
+        }
+        (TouchPhase::Moved, Some(i)) => {
+            let previous = model.touches[i].1;
+            // egui owns the gesture once it is dragging one of its widgets.
+            let egui_busy = ctx.egui_is_using_pointer();
+            match model.touches.as_slice() {
+                _ if egui_busy => {}
+                [_] => model.position += (pos - previous) / model.pixels_per_unit,
+                [a, b] => {
+                    let other = if i == 0 { b.1 } else { a.1 };
+                    // The midpoint between the fingers moves by half of this finger's motion.
+                    model.position += (pos - previous) / 2.0 / model.pixels_per_unit;
+                    let before = previous.distance(other);
+                    if before > 1.0 {
+                        model.zoom(pos.distance(other) / before, (pos + other) / 2.0);
+                    }
+                }
+                _ => {}
+            }
+            model.touches[i].1 = pos;
+        }
+        (TouchPhase::Ended | TouchPhase::Canceled, Some(i)) => {
+            model.touches.remove(i);
+        }
+        _ => {}
     }
 }
 

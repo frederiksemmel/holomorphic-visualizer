@@ -6,3 +6,4 @@ devenv.local.nix
 devenv.local.yaml
 .direnv
 result
+web/dist
