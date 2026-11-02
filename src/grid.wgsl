@@ -57,35 +57,96 @@ fn g_prime(df: vec2<f32>) -> vec2<f32> {
     return ONE + params.blend * (df - ONE);
 }
 
-// Endpoints of segment i; mirrors `GridLayout::segment` in src/lib.rs.
-struct Segment {
-    start: vec2<f32>,
-    end: vec2<f32>,
+// The grid line that segment i lies on, and where on it. Point j of the line,
+// `point(line, j)`, is where its segment j starts; together they mirror
+// `GridLayout::segment` in src/lib.rs.
+struct Line {
+    origin: vec2<f32>,
+    // One segment along the line.
+    step: vec2<f32>,
+    // Segments on the line.
+    n: u32,
+    // Which of them segment i is.
+    k: u32,
     horizontal: bool,
 };
 
-fn segment(i: u32) -> Segment {
-    var s: Segment;
+fn line_of(i: u32) -> Line {
+    var l: Line;
     let h_total = params.h_lines * params.h_segments;
     if i < h_total {
         let line = i / params.h_segments;
-        let k = i % params.h_segments;
-        let y = params.grid_min.y + f32(line) * params.spacing;
-        let step = (params.grid_max.x - params.grid_min.x) / f32(params.h_segments);
-        s.start = vec2(params.grid_min.x + f32(k) * step, y);
-        s.end = vec2(params.grid_min.x + f32(k + 1u) * step, y);
-        s.horizontal = true;
+        l.k = i % params.h_segments;
+        l.n = params.h_segments;
+        l.origin = vec2(params.grid_min.x, params.grid_min.y + f32(line) * params.spacing);
+        l.step = vec2((params.grid_max.x - params.grid_min.x) / f32(params.h_segments), 0.0);
+        l.horizontal = true;
     } else {
         let j = i - h_total;
         let line = j / params.v_segments;
-        let k = j % params.v_segments;
-        let x = params.grid_min.x + f32(line) * params.spacing;
-        let step = (params.grid_max.y - params.grid_min.y) / f32(params.v_segments);
-        s.start = vec2(x, params.grid_min.y + f32(k) * step);
-        s.end = vec2(x, params.grid_min.y + f32(k + 1u) * step);
-        s.horizontal = false;
+        l.k = j % params.v_segments;
+        l.n = params.v_segments;
+        l.origin = vec2(params.grid_min.x + f32(line) * params.spacing, params.grid_min.y);
+        l.step = vec2(0.0, (params.grid_max.y - params.grid_min.y) / f32(params.v_segments));
+        l.horizontal = false;
     }
-    return s;
+    return l;
+}
+
+fn point(l: Line, j: u32) -> vec2<f32> {
+    return l.origin + f32(min(j, l.n)) * l.step;
+}
+
+// Where point j of the line lands on screen.
+fn mapped(l: Line, j: u32) -> vec2<f32> {
+    return to_screen(g(point(l, j)));
+}
+
+// ---------------------------------------------------------------------------
+// Level of detail. Where the map shrinks the grid, many segments land inside a
+// pixel, and drawing each as its own quad costs far more than the picture
+// needs (Escher's spiral packs ~1M of them into a few hundred pixels). So runs
+// of 2^L segments that together span less than MERGE_BELOW pixels are drawn as
+// a single chord.
+//
+// A run is aligned: it starts at a segment index divisible by 2^L. Whether it
+// is short enough is estimated from its first segment alone, as that
+// segment's chord times 2^L. That makes the verdict a property of the run, so
+// every segment reaches the same verdict about it, and the estimate follows
+// the arc rather than the run's own chord, which is ~0 when the run loops
+// around. The run that gets drawn for a segment is the coarsest short run
+// containing it whose parent run is not short. Every segment lies in exactly
+// such a run (a single segment always counts as short enough), so no gaps.
+
+const MERGE_BELOW: f32 = 1.0;
+const MAX_MERGE_LEVEL: u32 = 10u;
+
+// Largest L <= MAX_MERGE_LEVEL with chord * 2^L <= MERGE_BELOW, or 0.
+fn short_level(chord: f32) -> u32 {
+    let levels = floor(log2(MERGE_BELOW / max(chord, 1e-30)));
+    return u32(clamp(levels, 0.0, f32(MAX_MERGE_LEVEL)));
+}
+
+// The level of the run that segment k draws, given its own chord on screen,
+// or -1 if a run it lies in is drawn by an earlier segment.
+fn merge_level(l: Line, chord: f32) -> i32 {
+    // k starts runs up to this level.
+    let top = min(countTrailingZeros(l.k), MAX_MERGE_LEVEL);
+    let own = short_level(chord);
+    if own < top {
+        return i32(own);
+    }
+    if top == MAX_MERGE_LEVEL {
+        return i32(top);
+    }
+    // The run at level `top` is short; drawn here unless its parent run, which
+    // starts 2^top segments earlier, is short too.
+    let p = l.k - (1u << top);
+    let parent_chord = length(mapped(l, p + 1u) - mapped(l, p));
+    if parent_chord * f32(2u << top) <= MERGE_BELOW {
+        return -1;
+    }
+    return i32(top);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +222,17 @@ fn to_screen(w: vec2<f32>) -> vec2<f32> {
     return (w + params.offset) * params.pixels_per_unit;
 }
 
+// Whether the bounding box of the chord from a to b, grown by `margin`,
+// overlaps the window.
+fn near_view(a: vec2<f32>, b: vec2<f32>, margin: f32) -> bool {
+    return all(max(a, b) > -params.half_view - margin)
+        && all(min(a, b) < params.half_view + margin);
+}
+
+fn finite(a: vec2<f32>, b: vec2<f32>) -> bool {
+    return all(abs(a) < vec2(MAX_SCREEN_COORD)) && all(abs(b) < vec2(MAX_SCREEN_COORD));
+}
+
 @vertex
 fn vertex(
     @builtin(vertex_index) vertex_index: u32,
@@ -172,27 +244,44 @@ fn vertex(
     let at_end = corner >= 2u;
     let side = select(-1.0, 1.0, (corner & 1u) == 1u);
 
-    let seg = segment(instance_index);
-    let a = to_screen(g(seg.start));
-    let b = to_screen(g(seg.end));
+    let l = line_of(instance_index);
+    let a = mapped(l, l.k);
+    let own_end = mapped(l, l.k + 1u);
 
-    // Drop segments outside the window before the costly part below (4 more
-    // evaluations of f). The quad is the straight chord from a to b, widened
-    // by the line width, so its bounding box decides exactly. NaN ends fail
-    // the comparisons and are dropped too. Far-off ends count as infinity even
-    // if the chord crosses the window, as before.
+    // Drop segments outside the window before the costly part below. The
+    // margin leaves room for a merged run starting here, which spans at most
+    // about MERGE_BELOW pixels. NaN ends fail the comparisons and are dropped
+    // too. Every decision here uses only values of the segment or its runs, so
+    // all four corners of the quad agree.
     let reach = 0.5 * params.line_width;
-    let in_view = all(max(a, b) > -params.half_view - reach)
-        && all(min(a, b) < params.half_view + reach);
-    let finite = all(abs(a) < vec2(MAX_SCREEN_COORD)) && all(abs(b) < vec2(MAX_SCREEN_COORD));
-    if !(in_view && finite) {
+    if !(near_view(a, own_end, reach + 2.0 * MERGE_BELOW) && finite(a, own_end)) {
         out.position = CULLED;
         return out;
     }
 
-    let df_start = f_prime(seg.start);
-    let df_end = f_prime(seg.end);
-    let z = select(seg.start, seg.end, at_end);
+    let level = merge_level(l, length(own_end - a));
+    if level < 0 {
+        out.position = CULLED;
+        return out;
+    }
+    let end = min(l.k + (1u << u32(level)), l.n);
+    var b = own_end;
+    if level > 0 {
+        b = mapped(l, end);
+    }
+    // The quad is the straight chord from a to b, widened by the line width,
+    // so its bounding box decides exactly. Far-off ends count as infinity even
+    // if the chord crosses the window.
+    if !(near_view(a, b, reach) && finite(a, b)) {
+        out.position = CULLED;
+        return out;
+    }
+
+    let start_z = point(l, l.k);
+    let end_z = point(l, end);
+    let df_start = f_prime(start_z);
+    let df_end = f_prime(end_z);
+    let z = select(start_z, end_z, at_end);
     let df = select(df_start, df_end, at_end);
 
     // Drop segments that jump across a pole instead of following the curve.
@@ -203,7 +292,7 @@ fn vertex(
     // midpoint near the pole has a huge derivative that excuses any chord.
     // Every corner of the quad must reach the same verdict, so this uses only
     // per-segment values.
-    let step = (seg.end - seg.start) * params.pixels_per_unit;
+    let step = (end_z - start_z) * params.pixels_per_unit;
     let tangent_start = cmul(g_prime(df_start), step);
     let tangent_end = cmul(g_prime(df_end), step);
     let chord_vec = b - a;
@@ -227,7 +316,7 @@ fn vertex(
         + 0.5 * params.line_width * (side * normal + along * dir);
 
     out.position = view.clip_from_world * vec4(pos, 0.0, 1.0);
-    out.color = vec4(pow(line_color(z, seg.horizontal, df), vec3(2.2)), 1.0);
+    out.color = vec4(pow(line_color(z, l.horizontal, df), vec3(2.2)), 1.0);
     return out;
 }
 
