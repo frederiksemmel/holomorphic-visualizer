@@ -11,7 +11,11 @@ const FUNCTION_LABEL: &str = "f(z) = p · (1 − z) / (1 + z)";
 
 /// Points per scroll "line" for mice that report wheel clicks instead of pixels.
 const POINTS_PER_LINE: f32 = 24.0;
-const MAX_RESOLUTION: f32 = 6.0;
+/// Finest grid the controls offer; below the library's hard cap
+/// (`conformal_visualizer::MAX_RESOLUTION`) to keep the line count sane.
+const MAX_UI_RESOLUTION: f32 = 6.0;
+/// The grid edges stay within `[-DOMAIN_LIMIT, DOMAIN_LIMIT]`.
+const DOMAIN_LIMIT: f32 = 15.0;
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=20_000.0;
 const DEFAULT_PIXELS_PER_UNIT: f32 = 150.0;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range.
@@ -191,7 +195,7 @@ impl Model {
             (KeyCode::KeyS, &mut self.y_min, delta.y),
         ] {
             if keys.pressed(key) {
-                *edge += step;
+                *edge = (*edge + step).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
                 held = true;
             }
         }
@@ -243,7 +247,7 @@ fn update(app: &App, model: &mut Model) {
         .show(&ctx, |ui| controls(ui, model));
 
     let keys = app.keys();
-    let typing = ctx.egui_wants_keyboard_input();
+    let typing = ctx.text_edit_focused();
     let over_ui = ctx.is_pointer_over_egui();
     model.peek = model.peek_button || (!typing && keys.pressed(KeyCode::KeyX));
 
@@ -251,7 +255,7 @@ fn update(app: &App, model: &mut Model) {
     let moved = mouse - model.last_mouse;
     model.last_mouse = mouse;
     if !typing && !over_ui && model.drag.is_none() && moved != Vec2::ZERO {
-        key_gesture(model, &keys, moved);
+        key_gesture(model, &keys, moved, moved);
     }
     mouse_drag(app, model, over_ui);
 }
@@ -282,10 +286,17 @@ fn mouse_drag(app: &App, model: &mut Model, over_ui: bool) {
 
 /// Hold a key and scroll or move the mouse: W/A/S/D move grid edges (two
 /// opposite ones slide the grid), P moves the parameter, F blends the homotopy.
-/// `delta` is in screen points with y up. Returns whether a key was held.
-fn key_gesture(model: &mut Model, keys: &ButtonInput<KeyCode>, delta: Vec2) -> bool {
+/// `delta` is in screen points with y up; `edge_delta` is the same motion as
+/// the edges should take it (see [`along_held_edges`]). Returns whether a key
+/// was held.
+fn key_gesture(
+    model: &mut Model,
+    keys: &ButtonInput<KeyCode>,
+    delta: Vec2,
+    edge_delta: Vec2,
+) -> bool {
     let plane = delta / model.pixels_per_unit;
-    let mut used = model.move_edges(keys, plane);
+    let mut used = model.move_edges(keys, edge_delta / model.pixels_per_unit);
     if keys.pressed(KeyCode::KeyP) {
         model.parameter += Complex::new(plane.x, plane.y);
         used = true;
@@ -331,7 +342,7 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "pan: drag or scroll · reset view: H");
 
     ui.separator();
-    ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_RESOLUTION).text("Resolution"));
+    ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_UI_RESOLUTION).text("Resolution"));
     hint(ui, "finer / coarser: ctrl + scroll");
     ui.label("Grid domain");
     for (value, label) in [
@@ -340,7 +351,7 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
         (&mut model.y_min, "y min"),
         (&mut model.y_max, "y max"),
     ] {
-        ui.add(egui::Slider::new(value, -15.0..=15.0).text(label));
+        ui.add(egui::Slider::new(value, -DOMAIN_LIMIT..=DOMAIN_LIMIT).text(label));
     }
     hint(ui, "hold W / A / S / D (top / left / bottom / right edge)");
     hint(ui, "+ scroll or move the mouse to drag that edge;");
@@ -478,7 +489,7 @@ fn source(horizontal: bool, s: f32) -> [f32; 3] {
 fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
     if app
         .egui_for_window(model.window)
-        .egui_wants_keyboard_input()
+        .text_edit_focused()
     {
         return;
     }
@@ -504,7 +515,7 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
 
 fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     let ctx = app.egui_for_window(model.window);
-    if ctx.is_pointer_over_egui() || ctx.egui_wants_keyboard_input() {
+    if ctx.is_pointer_over_egui() || ctx.text_edit_focused() {
         return;
     }
     let delta = match wheel.unit {
@@ -528,13 +539,13 @@ fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     // Gesture keys win over the modifiers so they combine with Ctrl. That matters
     // on laptops: libinput's disable-while-typing turns the touchpad off while a
     // letter is held, unless a modifier was pressed first.
-    if key_gesture(model, &keys, along_held_edges(&keys, content)) {
+    if key_gesture(model, &keys, content, along_held_edges(&keys, content)) {
         return;
     }
     if modifiers.shift {
         model.zoom((dominant / 200.0).exp(), app.mouse());
     } else if modifiers.ctrl {
-        model.resolution = (model.resolution - dominant / 50.0).clamp(0.0, MAX_RESOLUTION);
+        model.resolution = (model.resolution - dominant / 50.0).clamp(0.0, MAX_UI_RESOLUTION);
     } else {
         model.position += content / model.pixels_per_unit;
     }
