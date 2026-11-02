@@ -2066,6 +2066,7 @@ name = "conformal-visualizer"
 version = "0.2.0"
 dependencies = [
  "bevy",
+ "naga",
  "nannou",
  "num",
 ]
