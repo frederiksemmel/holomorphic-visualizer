@@ -100,7 +100,9 @@ const POINTS_PER_LINE: f32 = 24.0;
 const MAX_UI_RESOLUTION: f32 = 6.0;
 /// The grid edges stay within `[-DOMAIN_LIMIT, DOMAIN_LIMIT]`.
 const DOMAIN_LIMIT: f32 = 15.0;
-const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=20_000.0;
+/// Zoom limits, in screen points per unit. Positions are f32, so panning loses
+/// about |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
+const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=1_000_000.0;
 const DEFAULT_PIXELS_PER_UNIT: f32 = 150.0;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range.
 const HOMOTOPY_TRAVEL: f32 = 300.0;
