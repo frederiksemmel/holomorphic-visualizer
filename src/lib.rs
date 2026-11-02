@@ -1,5 +1,6 @@
 use num::complex::Complex;
 
+pub mod borders;
 pub mod examples;
 pub mod expr;
 pub mod morph;

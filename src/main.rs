@@ -1,7 +1,8 @@
 use bevy::asset::{Assets, uuid_handle};
 use bevy::input::{ButtonInput, mouse::MouseScrollUnit, touch::TouchPhase};
+use conformal_visualizer::borders::{self, Border};
 use conformal_visualizer::examples::EXAMPLES;
-use conformal_visualizer::expr::{self, ParseError};
+use conformal_visualizer::expr::{self, Function, ParseError};
 use conformal_visualizer::scene::{Coloring, DEFAULT_PIXELS_PER_UNIT, DEFAULT_RESOLUTION, Scene};
 use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph};
 use nannou::prelude::render::ShaderModel;
@@ -21,6 +22,22 @@ const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=1_000_000.0;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range
 /// at the default zoom (see [`Model::homotopy_travel`]).
 const HOMOTOPY_TRAVEL: f32 = 300.0;
+/// Seconds that holding ← or → takes across the whole homotopy range at the
+/// default zoom.
+const ARROW_SECONDS: f32 = 2.0;
+/// Longest time step of a motion driven by a held key. The app sleeps
+/// between inputs, so the frame that starts the motion can follow a long pause.
+const MAX_KEY_STEP: f32 = 1.0 / 30.0;
+/// Screen points of drag or scroll per resolution level.
+const RESOLUTION_TRAVEL: f32 = 50.0;
+/// Shift + scroll moves a grid border by one grid square per this many
+/// screen points: a square's size on screen at the default zoom and resolution.
+const SCROLL_PER_SQUARE: f32 = DEFAULT_PIXELS_PER_UNIT / (1 << DEFAULT_RESOLUTION as u32) as f32;
+/// At most this many squares per scroll event, so a flick doesn't throw the
+/// border across the plane.
+const MAX_SCROLL_SQUARES: f32 = 4.0;
+/// Largest move of the whole grid per Alt + drag or scroll event, in grid units.
+const MAX_GRID_STEP: f32 = 1.0;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
 const MAX_DENSITY: f32 = 2048.0;
 /// Upper bound on segments drawn per frame; large grids get coarser sampling.
@@ -190,6 +207,18 @@ enum Morph {
     Since(f32),
 }
 
+/// What a mouse drag on the canvas does, decided when the button goes down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Drag {
+    Pan,
+    Parameter,
+    Resolution,
+    /// Moves the border Shift holds, like Shift + scroll.
+    HeldBorder,
+    /// Slides the whole grid (Alt).
+    Grid,
+}
+
 struct Model {
     window: Entity,
     /// Index into `EXAMPLES`: the last one picked.
@@ -198,13 +227,14 @@ struct Model {
     formula: String,
     /// Why `formula` can't be drawn; the last one that could stays on screen.
     formula_error: Option<ParseError>,
+    /// The last formula that worked: the `f` the shader draws, for the CPU.
+    function: Function,
     /// WGSL for a new `f`, to be put in the grid shader on the next update.
     new_function: Option<String>,
     /// Screen points per unit length in the complex plane.
     pixels_per_unit: f32,
     /// Offset of the complex plane, in plane units.
     position: Vec2,
-    apply_function: bool,
     /// Grid density: `2^resolution` lines per unit.
     resolution: f32,
     x_min: f32,
@@ -222,8 +252,26 @@ struct Model {
     link_copied: Option<String>,
     /// Redrawing every frame (animating, or a URL update is due) rather than on input.
     continuous: bool,
-    /// Mouse button held on the canvas, and the cursor position at the last update.
-    drag: Option<(MouseButton, Vec2)>,
+    /// Mouse button held on the canvas, what it does, and the cursor position
+    /// at the last update.
+    drag: Option<(MouseButton, Drag, Vec2)>,
+    /// Space is down and no scroll or drag has used it yet, so letting go of
+    /// it plays or pauses.
+    space_tap: bool,
+    /// The border Shift + scroll moves, and the map's derivative where it was
+    /// drawn at the cursor, both taken when Shift went down and kept until it
+    /// comes up. Found again on every scroll, the border would switch to
+    /// another one as it moved away from the cursor, and the direction and
+    /// speed of the scroll would change under the fingers.
+    scrolled_border: Option<(Border, Complex<f32>)>,
+    /// Shift was down at the last update.
+    shift_held: bool,
+    /// The map's derivative at the grid point under the cursor when Alt went
+    /// down, which Alt + drag or scroll moves the whole grid by; like
+    /// `scrolled_border`, kept until Alt comes up.
+    grabbed_grid: Option<Complex<f32>>,
+    /// Alt was down at the last update.
+    alt_held: bool,
     /// The "hold" button in the control window is pressed.
     peek_button: bool,
     /// Show the source grid for now (hold button or X).
@@ -290,11 +338,149 @@ impl Model {
 
     /// How far to blend from the identity towards `f`; 0 shows the source grid.
     fn blend(&self) -> f32 {
-        if self.apply_function && !self.peek {
-            self.homotopy
+        if self.peek { 0.0 } else { self.homotopy }
+    }
+
+    /// Where the grid point `z` is drawn in the plane: h(z) = z + t·(f(z) − z)
+    /// with t = `blend()`, as `g` in `src/grid.wgsl` computes it. Unmapped it
+    /// is z exactly, even where f blows up.
+    fn map(&self, z: Complex<f32>) -> Complex<f32> {
+        let t = self.blend();
+        if t == 0.0 {
+            z
         } else {
-            0.0
+            z + t * (self.function.eval(z, self.parameter) - z)
         }
+    }
+
+    /// h'(z) = 1 + t·(f'(z) − 1).
+    fn map_derivative(&self, z: Complex<f32>) -> Complex<f32> {
+        let one = Complex::new(1.0, 0.0);
+        let t = self.blend();
+        if t == 0.0 {
+            one
+        } else {
+            one + t * (self.function.derivative(z, self.parameter) - one)
+        }
+    }
+
+    /// Where the grid point `z` is drawn on screen, in points.
+    fn grid_to_screen(&self, z: Complex<f32>) -> Complex<f32> {
+        (self.map(z) + complex(self.position)) * self.pixels_per_unit
+    }
+
+    fn grid(&self) -> [f32; 4] {
+        [self.x_min, self.x_max, self.y_min, self.y_max]
+    }
+
+    /// The grid border drawn nearest the screen point `cursor`, and the grid
+    /// point on it that lands there.
+    fn nearest_border(&self, cursor: Vec2) -> Option<(Border, Complex<f32>)> {
+        borders::nearest_border(self.grid(), &|z| self.grid_to_screen(z), complex(cursor))
+    }
+
+    /// Moves `border` by `step` grid units. Like `move_edges`, it may pass
+    /// the opposite border, which empties the grid until it comes back.
+    fn move_border(&mut self, border: Border, step: f32) {
+        let edge = match border {
+            Border::XMin => &mut self.x_min,
+            Border::XMax => &mut self.x_max,
+            Border::YMin => &mut self.y_min,
+            Border::YMax => &mut self.y_max,
+        };
+        *edge = (*edge + step).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
+    }
+
+    /// The border drawn nearest `cursor`, and the map's derivative where it
+    /// passes the cursor, for Shift + scroll to hold on to.
+    fn grab_for_scroll(&self, cursor: Vec2) -> Option<(Border, Complex<f32>)> {
+        let (border, z) = self.nearest_border(cursor)?;
+        Some((border, self.map_derivative(z)))
+    }
+
+    /// Moves the border Shift holds by a scroll of `delta` screen points,
+    /// measured across it as it was drawn when Shift went down. A scroll moves
+    /// it by grid squares, not with the fingers on screen: where the map draws
+    /// the squares small, following the fingers would race across them, and
+    /// where it draws them large, crawl.
+    fn scroll_held_border(&mut self, cursor: Vec2, delta: Vec2, wheel: bool) {
+        if self.scrolled_border.is_none() {
+            // Shift went down in the same frame as this scroll.
+            self.scrolled_border = self.grab_for_scroll(cursor);
+        }
+        if let Some((border, derivative)) = self.scrolled_border {
+            let across = border.scroll_across(derivative, complex(delta), wheel);
+            let squares = (across / SCROLL_PER_SQUARE).clamp(-MAX_SCROLL_SQUARES, MAX_SCROLL_SQUARES);
+            self.move_border(border, squares * self.full_layout().spacing);
+        }
+    }
+
+    /// Moves the border Shift holds by a drag of `delta` screen points: as
+    /// fast as the mouse moves across it where it was drawn when the drag
+    /// started.
+    fn drag_held_border(&mut self, delta: Vec2) {
+        if let Some((border, derivative)) = self.scrolled_border {
+            let across = border.scroll_across(derivative, complex(delta), false);
+            let step = across / (derivative.norm() * self.pixels_per_unit);
+            if step.is_finite() {
+                self.move_border(border, step.clamp(-borders::MAX_STEP, borders::MAX_STEP));
+            }
+        }
+    }
+
+    /// The map's derivative at the grid point drawn nearest `cursor` (from a
+    /// coarse sample of the grid), for Alt + drag or scroll to hold on to.
+    fn grab_grid(&self, cursor: Vec2) -> Option<Complex<f32>> {
+        const SAMPLES: usize = 48;
+        let [x_min, x_max, y_min, y_max] = self.grid();
+        if x_max < x_min || y_max < y_min {
+            return None;
+        }
+        let cursor = complex(cursor);
+        let lerp = |a: f32, b: f32, k: usize| a + (b - a) * k as f32 / SAMPLES as f32;
+        (0..=SAMPLES)
+            .flat_map(|i| (0..=SAMPLES).map(move |j| Complex::new(lerp(x_min, x_max, i), lerp(y_min, y_max, j))))
+            .map(|z| (z, (self.grid_to_screen(z) - cursor).norm()))
+            .filter(|(_, distance)| distance.is_finite())
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(z, _)| self.map_derivative(z))
+    }
+
+    /// Slides the whole grid so that the grid point under the cursor follows
+    /// a drag or scroll of `delta` screen points, as the grid was drawn when
+    /// Alt went down: moving the source by δ moves its image by h'·δ.
+    fn move_grid(&mut self, cursor: Vec2, delta: Vec2) {
+        if self.grabbed_grid.is_none() {
+            // Alt went down in the same frame as this scroll or drag.
+            self.grabbed_grid = self.grab_grid(cursor);
+        }
+        let Some(derivative) = self.grabbed_grid else {
+            return;
+        };
+        let step = complex(delta) / self.pixels_per_unit / derivative;
+        if !step.is_finite() {
+            return;
+        }
+        // Near a critical point a small motion asks for a leap across the plane.
+        let step = step * (MAX_GRID_STEP / step.norm()).min(1.0);
+        self.x_min = (self.x_min + step.re).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
+        self.x_max = (self.x_max + step.re).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
+        self.y_min = (self.y_min + step.im).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
+        self.y_max = (self.y_max + step.im).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
+    }
+
+    /// Moves the homotopy by `amount` screen points of travel (see
+    /// [`Model::homotopy_travel`]), stopping the animation.
+    fn scrub(&mut self, amount: f32) {
+        self.morph = Morph::Off;
+        self.homotopy = (self.homotopy + amount / self.homotopy_travel()).clamp(0.0, 1.0);
+    }
+
+    /// Makes the grid finer by `amount` screen points of drag or scroll
+    /// (coarser, if negative).
+    fn refine(&mut self, amount: f32) {
+        self.resolution =
+            (self.resolution + amount / RESOLUTION_TRAVEL).clamp(0.0, MAX_UI_RESOLUTION);
     }
 
     /// Shows `EXAMPLES[index]` with its own grid and parameter, bending from
@@ -354,9 +540,10 @@ impl Model {
 
     /// Shows `formula`, if it parses.
     fn set_formula(&mut self, formula: String) {
-        match expr::to_wgsl(&formula) {
-            Ok(body) => {
-                self.new_function = Some(body);
+        match expr::parse(&formula) {
+            Ok(function) => {
+                self.new_function = Some(function.to_wgsl());
+                self.function = function;
                 self.formula_error = None;
             }
             Err(error) => self.formula_error = Some(error),
@@ -454,10 +641,10 @@ fn model(app: &App) -> Model {
         formula: example.formula.into(),
         formula_error: None,
         // GridShaderPlugin starts the shader with this example.
+        function: expr::parse(example.formula).expect("examples parse"),
         new_function: None,
         pixels_per_unit: DEFAULT_PIXELS_PER_UNIT,
         position: Vec2::ZERO,
-        apply_function: true,
         resolution: DEFAULT_RESOLUTION,
         x_min,
         x_max,
@@ -472,6 +659,11 @@ fn model(app: &App) -> Model {
         link_copied: None,
         continuous: false,
         drag: None,
+        space_tap: false,
+        scrolled_border: None,
+        shift_held: false,
+        grabbed_grid: None,
+        alt_held: false,
         peek_button: false,
         peek: false,
         last_mouse: Vec2::ZERO,
@@ -485,8 +677,8 @@ fn model(app: &App) -> Model {
 }
 
 /// Plays the animation, keeps the page URL showing the scene, and redraws
-/// every frame only while either needs it.
-fn animate(app: &App, model: &mut Model) {
+/// every frame only while either needs it or a key is `steering` something.
+fn animate(app: &App, model: &mut Model, steering: bool) {
     let now = app.time();
     match model.morph {
         Morph::Off => {}
@@ -505,7 +697,7 @@ fn animate(app: &App, model: &mut Model) {
         model.link_written = (fragment, now);
     }
 
-    let continuous = model.morph != Morph::Off || link_due;
+    let continuous = model.morph != Morph::Off || link_due || steering;
     if continuous != model.continuous {
         model.continuous = continuous;
         app.set_update_mode(if continuous {
@@ -520,6 +712,16 @@ fn update(app: &App, model: &mut Model) {
     let ctx = app.egui_for_window(model.window);
     let window = app.window_rect();
     model.half_view = 0.5 * vec2(window.w(), window.h());
+
+    // Space plays and pauses (when let go, below), so it must not also click
+    // the button or checkbox that has keyboard focus, as egui would.
+    if !ctx.text_edit_focused() && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        ctx.memory_mut(|memory| {
+            if let Some(id) = memory.focused() {
+                memory.surrender_focus(id);
+            }
+        });
+    }
 
     // Phones get the canvas first; the panel opens from its header.
     let open = model
@@ -560,37 +762,113 @@ fn update(app: &App, model: &mut Model) {
     let over_ui = ctx.is_pointer_over_egui();
     model.peek = model.peek_button || (!typing && keys.pressed(KeyCode::KeyX));
 
+    // Space alone plays or pauses when let go; scrolling or dragging with it
+    // held uses it as a modifier instead. Watching the key itself, not its
+    // events, lets Ctrl come and go around it.
+    let shift = ctx.input(|i| i.modifiers.shift);
+    if shift && !model.shift_held {
+        model.scrolled_border = model.grab_for_scroll(app.mouse());
+    } else if !shift {
+        model.scrolled_border = None;
+    }
+    model.shift_held = shift;
+    let alt = ctx.input(|i| i.modifiers.alt);
+    if alt && !model.alt_held {
+        model.grabbed_grid = model.grab_grid(app.mouse());
+    } else if !alt {
+        model.grabbed_grid = None;
+    }
+    model.alt_held = alt;
+    if keys.just_pressed(KeyCode::Space) {
+        model.space_tap = !typing;
+    }
+    if keys.just_released(KeyCode::Space) && std::mem::take(&mut model.space_tap) && !typing {
+        model.toggle_morph();
+    }
+
+    // ← / → steer the homotopy, unless an egui widget has the keyboard (a
+    // focused slider takes the arrows itself).
+    let mut steer = 0.0;
+    if ctx.memory(|memory| memory.focused().is_none()) {
+        for (key, direction) in [(KeyCode::ArrowLeft, -1.0), (KeyCode::ArrowRight, 1.0)] {
+            if keys.pressed(key) {
+                steer += direction;
+            }
+        }
+    }
+    if steer != 0.0 {
+        let dt = app.time_delta().min(MAX_KEY_STEP);
+        model.scrub(steer * dt * HOMOTOPY_TRAVEL / ARROW_SECONDS);
+    }
+
     let mouse = app.mouse();
     let moved = mouse - model.last_mouse;
     model.last_mouse = mouse;
     if !typing && !over_ui && model.drag.is_none() && moved != Vec2::ZERO {
         key_gesture(model, &keys, moved, moved);
     }
-    mouse_drag(app, model, over_ui);
-    animate(app, model);
+    let modifiers = ctx.input(|i| i.modifiers);
+    mouse_drag(app, model, &keys, modifiers, over_ui);
+    animate(app, model, steer != 0.0);
 }
 
-/// Left-drag pans, right-drag moves the parameter p. Drags must start on the canvas.
-fn mouse_drag(app: &App, model: &mut Model, over_ui: bool) {
+/// Left-drag moves the grid border drawn nearest the cursor (with Ctrl too,
+/// which keeps a laptop touchpad on), Shift + left-drag scrubs the homotopy,
+/// Ctrl + Shift + left-drag sets the resolution. Space + left-drag and
+/// middle-drag pan, right-drag moves the parameter p. Drags must start on
+/// the canvas.
+fn mouse_drag(
+    app: &App,
+    model: &mut Model,
+    keys: &ButtonInput<KeyCode>,
+    modifiers: egui::Modifiers,
+    over_ui: bool,
+) {
     let buttons = app.mouse_buttons();
     let mouse = app.mouse();
-    for button in [MouseButton::Left, MouseButton::Right] {
-        if buttons.just_pressed(button) && !over_ui {
-            model.drag = Some((button, mouse));
+    for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
+        if !buttons.just_pressed(button) || over_ui {
+            continue;
+        }
+        let drag = match button {
+            MouseButton::Right => Some(Drag::Parameter),
+            MouseButton::Middle => Some(Drag::Pan),
+            // Space wins over the modifiers, as in `mouse_wheel`.
+            _ if keys.pressed(KeyCode::Space) => {
+                model.space_tap = false;
+                Some(Drag::Pan)
+            }
+            _ if modifiers.shift && modifiers.ctrl => Some(Drag::Resolution),
+            _ if modifiers.shift => {
+                model.scrolled_border = model.grab_for_scroll(mouse);
+                Some(Drag::HeldBorder)
+            }
+            _ if modifiers.alt => {
+                model.grabbed_grid = model.grab_grid(mouse);
+                Some(Drag::Grid)
+            }
+            _ => Some(Drag::Pan),
+        };
+        if let Some(drag) = drag {
+            model.drag = Some((button, drag, mouse));
         }
     }
-    let Some((button, from)) = model.drag else {
+    let Some((button, drag, from)) = model.drag else {
         return;
     };
     if !buttons.pressed(button) {
         model.drag = None;
         return;
     }
-    match button {
-        MouseButton::Left => model.position += (mouse - from) / model.pixels_per_unit,
-        _ => model.move_parameter(mouse - from),
+    let delta = mouse - from;
+    match drag {
+        Drag::Pan => model.position += delta / model.pixels_per_unit,
+        Drag::Parameter => model.move_parameter(delta),
+        Drag::HeldBorder => model.drag_held_border(delta),
+        Drag::Grid => model.move_grid(mouse, delta),
+        Drag::Resolution => model.refine(delta.x + delta.y),
     }
-    model.drag = Some((button, mouse));
+    model.drag = Some((button, drag, mouse));
 }
 
 /// Hold a key and scroll or move the mouse: W/A/S/D move grid edges (two
@@ -610,8 +888,7 @@ fn key_gesture(
         used = true;
     }
     if keys.pressed(KeyCode::KeyF) {
-        model.morph = Morph::Off;
-        model.homotopy = (model.homotopy + (delta.x + delta.y) / model.homotopy_travel()).clamp(0.0, 1.0);
+        model.scrub(delta.x + delta.y);
         used = true;
     }
     used
@@ -723,13 +1000,10 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     function_editor(ui, model);
     ui.separator();
 
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut model.apply_function, "Apply function");
-        model.peek_button = ui
-            .button("Hold to show source")
-            .is_pointer_button_down_on();
-    });
-    hint(ui, "toggle: space · peek at the source grid: hold the button or X");
+    model.peek_button = ui
+        .button("Hold to show source")
+        .is_pointer_button_down_on();
+    hint(ui, "peek at the source grid: hold the button or X");
     ui.horizontal(|ui| {
         let slider = egui::Slider::new(&mut model.homotopy, 0.0..=1.0).text("Homotopy");
         if ui.add(slider).changed() {
@@ -740,7 +1014,10 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
             model.toggle_morph();
         }
     });
-    hint(ui, "hold F + scroll or move the mouse · animate: M");
+    hint(ui, "play / pause: space or M");
+    // Spelled out: the default egui fonts have no ← / → glyphs.
+    hint(ui, "scrub: left / right arrow, space + scroll,");
+    hint(ui, "or hold F + scroll or move the mouse");
 
     ui.separator();
     ui.horizontal(|ui| {
@@ -753,12 +1030,12 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
             model.reset_view();
         }
     });
-    hint(ui, "zoom: shift + scroll (around the cursor)");
+    hint(ui, "zoom: ctrl + scroll (around the cursor)");
     hint(ui, "pan: drag or scroll · reset view: H");
 
     ui.separator();
     ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_UI_RESOLUTION).text("Resolution"));
-    hint(ui, "finer / coarser: ctrl + scroll");
+    hint(ui, "finer / coarser: ctrl + shift + scroll or drag");
     ui.label("Grid domain");
     for (value, label) in [
         (&mut model.x_min, "x min"),
@@ -768,10 +1045,14 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     ] {
         ui.add(egui::Slider::new(value, -DOMAIN_LIMIT..=DOMAIN_LIMIT).text(label));
     }
+    hint(ui, "shift + scroll or drag across a border to move it");
+    hint(ui, "(the one nearest the cursor) · alt + drag or scroll:");
+    hint(ui, "move the whole grid");
     hint(ui, "hold W / A / S / D (top / left / bottom / right edge)");
     hint(ui, "+ scroll or move the mouse to drag that edge;");
     hint(ui, "A + D or W + S slide the grid, all four move it");
-    hint(ui, "touchpad off while a key is held? add Ctrl: Ctrl + A + scroll");
+    hint(ui, "touchpad off while a key is held? press Ctrl first:");
+    hint(ui, "Ctrl + A + scroll and Ctrl + Space work the same");
 
     ui.separator();
     ui.horizontal(|ui| {
@@ -916,7 +1197,6 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
         KeyCode::Digit5,
     ];
     match key {
-        KeyCode::Space => model.apply_function = !model.apply_function,
         KeyCode::KeyR => model.reset_parameter(),
         KeyCode::KeyE => model.set_example((model.example + 1) % EXAMPLES.len()),
         KeyCode::KeyH | KeyCode::Home => model.reset_view(),
@@ -1002,16 +1282,26 @@ fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     // Positive y moves content down; the plane has y pointing up.
     let content = vec2(delta.x, -delta.y);
 
-    // Gesture keys win over the modifiers so they combine with Ctrl. That matters
-    // on laptops: libinput's disable-while-typing turns the touchpad off while a
-    // letter is held, unless a modifier was pressed first.
+    // Gesture keys and Space win over the modifiers so they combine with Ctrl.
+    // That matters on laptops: libinput's disable-while-typing turns the
+    // touchpad off while a letter or Space is held, unless a modifier was
+    // pressed first.
     if key_gesture(model, &keys, content, along_held_edges(&keys, content)) {
         return;
     }
-    if modifiers.shift {
-        model.zoom((dominant / 200.0).exp(), app.mouse());
+    if keys.pressed(KeyCode::Space) {
+        model.space_tap = false;
+        model.scrub(content.x + content.y);
+        return;
+    }
+    if modifiers.ctrl && modifiers.shift {
+        model.refine(-dominant);
     } else if modifiers.ctrl {
-        model.resolution = (model.resolution - dominant / 50.0).clamp(0.0, MAX_UI_RESOLUTION);
+        model.zoom((dominant / 200.0).exp(), app.mouse());
+    } else if modifiers.shift {
+        model.scroll_held_border(app.mouse(), content, wheel.unit == MouseScrollUnit::Line);
+    } else if modifiers.alt {
+        model.move_grid(app.mouse(), content);
     } else {
         model.position += content / model.pixels_per_unit;
     }
@@ -1032,6 +1322,10 @@ fn along_held_edges(keys: &ButtonInput<KeyCode>, content: Vec2) -> Vec2 {
         (false, true) => vec2(content.x, dominant),
         _ => content,
     }
+}
+
+fn complex(v: Vec2) -> Complex<f32> {
+    Complex::new(v.x, v.y)
 }
 
 fn to_screen(model: &Model, z: Complex<f32>) -> Vec2 {

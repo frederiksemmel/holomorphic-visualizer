@@ -60,7 +60,7 @@ the circles miss each other.
 
 ![Escher's Print Gallery map](examples/escher.png)
 
-Zoom in on the centre (`shift + scroll`) and the spiral keeps going:
+Zoom in on the centre (`ctrl + scroll`) and the spiral keeps going:
 
 ![Escher's Print Gallery map, zoomed in](examples/escher-zoom.png)
 
@@ -153,31 +153,38 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
     A conformal map acts near each point like multiplying by `f'(z)`, so Stretch
     and Rotation together show everything the map does locally. The grid
     shows that right angles are kept.
-* Controls. Most are a key held down while you scroll (mouse wheel or
-  touchpad) or just move the mouse:
-    * drag or scroll to pan, `shift + scroll` to zoom around the cursor, `h` to
+* Controls. Most are a mouse drag, a scroll (mouse wheel or touchpad) with a
+  modifier, or a key held down while you scroll or just move the mouse:
+    * drag or scroll to pan, `ctrl + scroll` to zoom around the cursor, `h` to
       reset the view
-    * `ctrl + scroll` to make the grid finer or coarser
+    * `shift + scroll` or `shift` + drag moves a border of the grid, wherever
+      the map has put it: the one drawn nearest the cursor when `shift` goes
+      down, until you let go. Only the part of the motion across the border
+      counts: a drag moves it as fast as the mouse, a scroll by grid squares
+    * `alt + scroll` or `alt` + drag slides the whole grid: the grid point
+      under the cursor when `alt` goes down follows the motion
+    * `ctrl + shift + scroll` or `ctrl + shift` + drag makes the grid finer
+      or coarser
     * hold `w` / `a` / `s` / `d` and scroll or move the mouse to drag the top /
       left / bottom / right edge of the grid. Hold two opposite ones (`a + d`,
       `w + s`) to slide the grid along, all four to move it
-    * on a laptop touchpad, holding a letter key may switch the touchpad off
-      (libinput's disable-while-typing). Press `ctrl` first, then the key:
-      `ctrl + a + scroll` works the same, and the touchpad stays on. This goes
-      for `p` and `f` below too
+    * on a laptop touchpad, holding a letter key or `space` may switch the
+      touchpad off (libinput's disable-while-typing). Press `ctrl` first, then
+      the key: `ctrl + a + scroll` and `ctrl + space` work the same, and the
+      touchpad stays on. This goes for `p` and `f` below too
     * hold `p` and scroll or move the mouse, or right-drag the canvas, to move
       the parameter `p`; `r` resets it to the example's value
-    * hold `f` and scroll or move the mouse to blend from the identity to `f`
-      (the homotopy)
-    * `m` (or the Animate box) plays the blend back and forth, as it does when
-      the visualizer opens or you pick an example; taking the homotopy in hand
-      stops it
+    * blend from the identity to `f` (the homotopy) with `←` / `→`,
+      `space + scroll`, or holding `f` and scrolling or moving
+      the mouse
+    * `space` (or `m`, or the Animate box) plays the blend back and forth, as
+      it does when the visualizer opens or you pick an example, and pauses it;
+      taking the homotopy in hand stops it too
     * **Copy link** copies a link to exactly this view. The page URL always
       shows it as well: the example, the formula, `p`, the grid, the coloring,
       the view and the homotopy, written as what differs from the example.
       Editing the `#…` part of the URL by hand works too
     * `e` steps to the next example
-    * `space` toggles applying the function; hold `x` or the "Hold to show
-      source" button to peek at the source grid
+    * hold `x` or the "Hold to show source" button to peek at the source grid
     * the control window has sliders for everything, with these shortcuts
       written underneath
