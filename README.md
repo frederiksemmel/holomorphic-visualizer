@@ -106,6 +106,10 @@ CI (`.github/workflows/web.yml`) builds it for every pull request and publishes
 it to GitHub Pages from `master`. nannou is vendored in `vendor/nannou` with
 fixes for the web build; see the note in `Cargo.toml`.
 
+The axis numbers and the hover readout are set in two of
+[KaTeX](https://katex.org)'s fonts, in `assets/fonts` with their license
+(SIL Open Font License 1.1); the control window keeps egui's own font.
+
 ### Nix package
 
 The app is also exposed as a devenv output (built with crate2nix):
@@ -137,7 +141,8 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
   `f`, which Bevy recompiles. Only formulas that parse are sent to the GPU,
   and the tests compile the code generated for a range of formulas with naga.
   The CPU evaluates the same parse tree, with the same branch cuts, only for
-  the few points the mouse needs, such as which grid border is under it.
+  the few points the mouse needs, such as which grid border is under it or
+  what landed under the cursor.
 * Color modes (`c` cycles them, `1`–`5` pick one):
     * **White**: plain lines.
     * **Source**: horizontal lines warm, vertical lines cool, shaded by
@@ -153,6 +158,16 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
     A conformal map acts near each point like multiplying by `f'(z)`, so Stretch
     and Rotation together show everything the map does locally. The grid
     shows that right angles are kept.
+* Behind the grid, a faint grid of the plane itself, numbered along the axes,
+  refines and coarsens as you zoom (steps of 1, 2 or 5 times a power of
+  ten). When an axis is off screen, its numbers stay at the edge of the
+  window.
+* Rest the cursor on the canvas for half a second to see what landed under
+  it: the point w there and the grid points z that the map sends to w (up to
+  three; the Joukowski map has two), with how much f stretches and turns
+  near each, `|f'(z)|` and `arg f'(z)`. Dots mark w and each z, joined by a
+  line. The CPU finds the z by Newton's method, seeded from a coarse sample
+  of the grid. Moving, scrolling or holding a key or button hides it.
 * Controls. Most are a mouse drag, a scroll (mouse wheel or touchpad) with a
   modifier, or a key held down while you scroll or just move the mouse:
     * drag or scroll to pan, `ctrl + scroll` to zoom around the cursor, `h` to
