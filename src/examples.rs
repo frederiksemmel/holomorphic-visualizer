@@ -1,0 +1,99 @@
+//! The functions on offer in the control window, each with a grid and
+//! parameter that show it well.
+
+use num::Complex;
+
+/// A function to look at, with a grid and parameter that show it well.
+pub struct Example {
+    pub name: &'static str,
+    /// Names the example in shared links (see [`crate::scene`]).
+    pub slug: &'static str,
+    /// What to type for f(z); see `src/expr.rs` for the syntax.
+    pub formula: &'static str,
+    pub about: &'static str,
+    /// Further reading: (link text, URL).
+    pub links: &'static [(&'static str, &'static str)],
+    /// x min, x max, y min, y max.
+    pub grid: [f32; 4],
+    pub parameter: Complex<f32>,
+}
+
+/// The functions on offer in the control window.
+pub const EXAMPLES: [Example; 6] = [
+    Example {
+        name: "Möbius",
+        slug: "mobius",
+        formula: "p * (1 - z) / (1 + z)",
+        about: "A Möbius transformation: it maps lines and circles to lines and circles. \
+                Every Möbius transformation contains a Mickey Mouse (unproven conjecture).",
+        links: &[],
+        grid: [0.0, 1.0, 0.0, 1.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Exponential",
+        slug: "exp",
+        formula: "exp(p * z)",
+        about: "Horizontal lines become rays, vertical lines become circles. \
+                The strip of height 2π wraps once around the origin.",
+        links: &[],
+        grid: [-1.0, 1.0, -3.0, 3.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Power",
+        slug: "power",
+        formula: "z^p",
+        about: "For real p it multiplies angles at the origin by p. \
+                Try a tall rectangle just right of 0.",
+        links: &[],
+        grid: [0.5, 1.0, -1.0, 1.0],
+        parameter: Complex::new(3.0, 0.0),
+    },
+    Example {
+        name: "Sine",
+        slug: "sine",
+        formula: "p * sin(z)",
+        about: "Vertical lines become hyperbolas, horizontal lines ellipses, \
+                all with foci at ±p.",
+        links: &[],
+        grid: [-1.5, 1.5, -1.0, 1.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Joukowski",
+        slug: "joukowski",
+        formula: "z + p / z",
+        about: "The Joukowski map, used to model airfoils. It folds the circle |z| = √|p| \
+                onto a segment; inside and outside that circle each cover the rest \
+                of the plane once.",
+        links: &[],
+        grid: [-2.0, 2.0, -2.0, 2.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Escher",
+        slug: "escher",
+        formula: "p * exp(2pi i z / (2pi i + log(256)))",
+        about: "M. C. Escher's Print Gallery (1956). This is exp(z)^(1/α) with \
+                α = (2πi + log 256) / 2πi ≈ 1 − 0.8825i. The straight picture behind \
+                the print contains itself, scaled down by 256. Escher's map w ↦ w^(1/α) \
+                curls it so that one turn around the centre zooms by 256: his picture \
+                contains a copy of itself shrunk by 22.58 and turned by 157.6°, so it \
+                zooms in forever while circling the origin. The grid is the straight \
+                picture in log coordinates, w = exp(z): vertical lines are circles \
+                around its centre, horizontal lines are rays.",
+        links: &[
+            (
+                "Print Gallery on Wikipedia",
+                "https://en.wikipedia.org/wiki/Print_Gallery_(M._C._Escher)",
+            ),
+            (
+                "de Smit & Lenstra: The Mathematical Structure of Escher's Print Gallery",
+                "https://pub.math.leidenuniv.nl/~smitbde/papers/2003-de_smit-lenstra-escher.pdf",
+            ),
+        ],
+        grid: [-12.0, -1.0, -3.0, 3.25],
+        parameter: Complex::new(1.0, 0.0),
+    },
+];

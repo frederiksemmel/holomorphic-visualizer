@@ -9,10 +9,29 @@ name = "conformal-visualizer"
 path = "src/main.rs"
 
 [dependencies]
-nannou = { version = "0.20", features = ["egui"] }
+# Default features off: on the web they would add WebGL2 next to WebGPU, a
+# bundled font and image decoders, none of which the app uses, to the download.
+nannou = { version = "0.20", default-features = false, features = ["egui"] }
 # Same version nannou uses; its derives (shader models) expect `bevy` in scope.
 bevy = { version = "0.19", default-features = false }
 num = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# nannou's default features, minus WebGL2 (web only).
+nannou = { version = "0.20", features = [
+    "jpeg",
+    "multi_threaded",
+    "notosans",
+    "png",
+    "system_font_discovery",
+    "wayland",
+    "x11",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Reads and updates the page URL (the shared link).
+web-sys = { version = "0.3", features = ["History", "Location", "Window"] }
+wasm-bindgen = "0.2"
 
 [dev-dependencies]
 # Checks in tests that generated shader code compiles. Same version as wgpu uses.
@@ -34,5 +53,6 @@ nannou = { path = "vendor/nannou" }
 # The browser build (web/build.sh): smaller download over a faster build.
 inherits = "release"
 opt-level = "s"
-lto = "thin"
+lto = "fat"
+codegen-units = 1
 panic = "abort"
