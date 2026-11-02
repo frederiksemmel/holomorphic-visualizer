@@ -1,14 +1,18 @@
 //! Formulas typed by the user, like `p * (1 - z) / (1 + z)`, turned into WGSL.
 //!
-//! The grid is mapped on the GPU, so a formula is never evaluated here: it is
-//! parsed and emitted as a WGSL expression over the complex helpers in
-//! `src/complex.wgsl`, which becomes the body of `f` in the grid shader.
+//! The grid is mapped on the GPU: a formula is parsed and emitted as a WGSL
+//! expression over the complex helpers in `src/complex.wgsl`, which becomes
+//! the body of `f` in the grid shader. [`Function::eval`] evaluates the same
+//! parse tree on the CPU, for the few points the mouse needs (which grid
+//! border is under the cursor); it mirrors those helpers, branch cuts included,
+//! so it agrees with what is drawn.
 //!
 //! Syntax: numbers, `z`, `p`, `i`, `pi` (or `π`), `e`; `+ - * / ^` with the
 //! usual precedence (`^` binds tightest and to the right); parentheses; and the
 //! functions in [`FUNCTIONS`], called with parentheses. Juxtaposition
 //! multiplies, so `2pi i z` and `p sin(z)` work, at the precedence of `*`.
 
+use num::Complex;
 use std::fmt;
 
 /// Functions a formula can call, and the `src/complex.wgsl` helper for each.
@@ -52,6 +56,11 @@ impl std::error::Error for ParseError {}
 
 /// Translates `formula` into a WGSL expression in `z` and `p`, both `vec2<f32>`.
 pub fn to_wgsl(formula: &str) -> Result<String, ParseError> {
+    parse(formula).map(|function| function.to_wgsl())
+}
+
+/// Reads `formula` as a function of `z` and `p`.
+pub fn parse(formula: &str) -> Result<Function, ParseError> {
     let tokens = tokenize(formula)?;
     if tokens.len() > MAX_TOKENS {
         return Err(ParseError {
@@ -69,7 +78,31 @@ pub fn to_wgsl(formula: &str) -> Result<String, ParseError> {
     if let Some(token) = parser.peek() {
         return Err(parser.error_at(token.position, format!("unexpected {}", token.kind)));
     }
-    Ok(expr.to_wgsl())
+    Ok(Function(expr))
+}
+
+/// A formula that parsed: f(z, p), as WGSL for the GPU or evaluated here.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Function(Expr);
+
+impl Function {
+    /// A WGSL expression in `z` and `p`, both `vec2<f32>`.
+    pub fn to_wgsl(&self) -> String {
+        self.0.to_wgsl()
+    }
+
+    /// f(z, p), computed the way the grid shader computes it.
+    pub fn eval(&self, z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+        self.0.eval(z, p)
+    }
+
+    /// f'(z) by central differences, with the step `f_prime` in
+    /// `src/grid.wgsl` uses: large enough that f32 rounding in f doesn't
+    /// swamp the difference, and relative to |z| so it stays so far out.
+    pub fn derivative(&self, z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+        let h = 1e-3 * z.norm().max(1.0);
+        (self.eval(z + h, p) - self.eval(z - h, p)) / (2.0 * h)
+    }
 }
 
 /// The WGSL definition of `f` with `body` as its value.
@@ -224,6 +257,39 @@ impl Expr {
         }
     }
 
+    fn eval(&self, z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+        match self {
+            Expr::Number(n) => Complex::new(*n, 0.0),
+            Expr::Z => z,
+            Expr::P => p,
+            Expr::I => Complex::i(),
+            Expr::Neg(a) => -a.eval(z, p),
+            Expr::Add(a, b) => a.eval(z, p) + b.eval(z, p),
+            Expr::Sub(a, b) => a.eval(z, p) - b.eval(z, p),
+            Expr::Mul(a, b) => a.eval(z, p) * b.eval(z, p),
+            Expr::Div(a, b) => cdiv(a.eval(z, p), b.eval(z, p)),
+            Expr::Pow(a, b) => match b.integer() {
+                Some(n) => cpowi(a.eval(z, p), n),
+                None => cexp(b.eval(z, p) * clog(a.eval(z, p))),
+            },
+            Expr::Call(function, a) => {
+                let a = a.eval(z, p);
+                match *function {
+                    "cexp" => cexp(a),
+                    "clog" => clog(a),
+                    "csqrt" => csqrt(a),
+                    "csin" => csin(a),
+                    "ccos" => ccos(a),
+                    "ctan" => cdiv(csin(a), ccos(a)),
+                    "csinh" => csinh(a),
+                    "ccosh" => ccosh(a),
+                    "ctanh" => cdiv(csinh(a), ccosh(a)),
+                    _ => unreachable!("{function} is not in FUNCTIONS"),
+                }
+            }
+        }
+    }
+
     /// The value of a small integer literal like `3` or `-2`.
     fn integer(&self) -> Option<i32> {
         match self {
@@ -232,6 +298,66 @@ impl Expr {
             _ => None,
         }
     }
+}
+
+// The helpers in `src/complex.wgsl`, in the same order of operations.
+// Multiplication, addition and negation are num's, which compute the same.
+
+fn cdiv(a: Complex<f32>, b: Complex<f32>) -> Complex<f32> {
+    let d = b.re * b.re + b.im * b.im;
+    Complex::new(
+        (a.re * b.re + a.im * b.im) / d,
+        (a.im * b.re - a.re * b.im) / d,
+    )
+}
+
+fn cexp(z: Complex<f32>) -> Complex<f32> {
+    z.re.exp() * Complex::new(z.im.cos(), z.im.sin())
+}
+
+/// Principal branch: the cut runs along the negative real axis.
+fn clog(z: Complex<f32>) -> Complex<f32> {
+    Complex::new(z.norm().ln(), z.im.atan2(z.re))
+}
+
+fn csqrt(z: Complex<f32>) -> Complex<f32> {
+    let angle = 0.5 * z.im.atan2(z.re);
+    z.norm().sqrt() * Complex::new(angle.cos(), angle.sin())
+}
+
+/// z^n by repeated squaring: exact, and no branch cut.
+fn cpowi(z: Complex<f32>, n: i32) -> Complex<f32> {
+    let mut result = Complex::new(1.0, 0.0);
+    let mut base = z;
+    let mut k = n.unsigned_abs();
+    while k > 0 {
+        if k & 1 == 1 {
+            result *= base;
+        }
+        base = base * base;
+        k >>= 1;
+    }
+    if n < 0 {
+        cdiv(Complex::new(1.0, 0.0), result)
+    } else {
+        result
+    }
+}
+
+fn csin(z: Complex<f32>) -> Complex<f32> {
+    Complex::new(z.re.sin() * z.im.cosh(), z.re.cos() * z.im.sinh())
+}
+
+fn ccos(z: Complex<f32>) -> Complex<f32> {
+    Complex::new(z.re.cos() * z.im.cosh(), -z.re.sin() * z.im.sinh())
+}
+
+fn csinh(z: Complex<f32>) -> Complex<f32> {
+    Complex::new(z.re.sinh() * z.im.cos(), z.re.cosh() * z.im.sin())
+}
+
+fn ccosh(z: Complex<f32>) -> Complex<f32> {
+    Complex::new(z.re.cosh() * z.im.cos(), z.re.sinh() * z.im.sin())
 }
 
 struct Parser {
@@ -493,6 +619,82 @@ mod tests {
         assert_eq!(error("z $ 2").position, 2);
         assert_eq!(error("1..2").position, 0);
         assert!(error("1e39").message.contains("too large"));
+    }
+
+    fn eval(formula: &str, z: Complex<f32>) -> Complex<f32> {
+        parse(formula).unwrap().eval(z, Complex::new(0.5, -2.0))
+    }
+
+    fn assert_close(a: Complex<f32>, b: Complex<f32>, what: &str) {
+        assert!((a - b).norm() <= 1e-5 * b.norm().max(1.0), "{what}: {a} vs {b}");
+    }
+
+    #[test]
+    fn evaluates_known_values() {
+        let i = Complex::i();
+        let one = Complex::new(1.0, 0.0);
+        // Integer powers are multiplied out, so these are exact.
+        assert_eq!(eval("z^2", one + i), 2.0 * i);
+        assert_eq!(eval("z^-1", i), -i);
+        assert_eq!(eval("1/z", i), -i);
+        assert_eq!(eval("p", i), Complex::new(0.5, -2.0));
+        assert_eq!(eval("2pi i z", one), Complex::new(0.0, 2.0 * std::f32::consts::PI));
+        assert_close(eval("exp(i pi)", one), -one, "exp(iπ)");
+        // On the cut, the principal branch takes the upper side, as atan2 does.
+        let minus_four = Complex::new(-4.0, 0.0);
+        assert_close(eval("log(z)", Complex::new(-1.0, 0.0)), std::f32::consts::PI * i, "log(-1)");
+        assert_close(eval("sqrt(z)", minus_four), 2.0 * i, "sqrt(-4)");
+        assert_close(eval("z^0.5", minus_four), 2.0 * i, "(-4)^0.5");
+        assert_close(eval("z^(1/2)", minus_four), 2.0 * i, "(-4)^(1/2)");
+        // Below the cut, the other side.
+        let below = Complex::new(-4.0, -1e-6);
+        assert_close(eval("sqrt(z)", below), -2.0 * i, "sqrt just below -4");
+    }
+
+    #[test]
+    fn evaluation_agrees_with_num() {
+        let p = Complex::new(0.5, -2.0);
+        let points = [
+            Complex::new(0.3, 0.7),
+            Complex::new(-1.2, 0.4),
+            Complex::new(2.0, -1.5),
+            Complex::new(-0.4, -0.9),
+        ];
+        let cases: [(&str, fn(Complex<f32>, Complex<f32>) -> Complex<f32>); 15] = [
+            ("exp(z)", |z, _| z.exp()),
+            ("log(z)", |z, _| z.ln()),
+            ("ln(z)", |z, _| z.ln()),
+            ("sqrt(z)", |z, _| z.sqrt()),
+            ("sin(z)", |z, _| z.sin()),
+            ("cos(z)", |z, _| z.cos()),
+            ("tan(z)", |z, _| z.tan()),
+            ("sinh(z)", |z, _| z.sinh()),
+            ("cosh(z)", |z, _| z.cosh()),
+            ("tanh(z)", |z, _| z.tanh()),
+            ("z^p", |z, p| z.powc(p)),
+            ("z^3", |z, _| z.powi(3)),
+            ("z^-2", |z, _| z.powi(-2)),
+            ("z^1.5", |z, _| z.powf(1.5)),
+            ("p (1 - z) / (1 + z)", |z, p| p * (1.0 - z) / (1.0 + z)),
+        ];
+        for (formula, expected) in cases {
+            let function = parse(formula).unwrap();
+            for z in points {
+                assert_close(function.eval(z, p), expected(z, p), &format!("{formula} at {z}"));
+            }
+        }
+    }
+
+    #[test]
+    fn derivative_by_finite_differences() {
+        let p = Complex::new(1.0, 0.0);
+        let close = |a: Complex<f32>, b: Complex<f32>| (a - b).norm() <= 1e-3 * b.norm().max(1.0);
+        for z in [Complex::new(1.0, 1.0), Complex::new(-0.2, 0.3), Complex::new(8.0, -3.0)] {
+            let cube = parse("z^3").unwrap().derivative(z, p);
+            assert!(close(cube, 3.0 * z * z), "(z^3)' at {z}: {cube}");
+            let exp = parse("exp(z)").unwrap().derivative(z, p);
+            assert!(close(exp, z.exp()), "exp' at {z}: {exp}");
+        }
     }
 
     #[test]
