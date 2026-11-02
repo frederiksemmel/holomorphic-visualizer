@@ -102,6 +102,15 @@ build-web    # build the browser version into web/dist
 serve-web    # build it and serve it on http://127.0.0.1:8080
 ```
 
+The release build optimizes the whole program as one unit and then runs
+wasm-opt, which takes minutes even after a small change. For trying it out,
+`WEB_PROFILE=web-dev` (in nushell: `with-env {WEB_PROFILE: web-dev} { serve-web }`)
+builds in seconds after the first time, for a bigger download.
+
+WebGPU needs a secure context, so a phone on the same Wi-Fi gets the fallback
+page from `http://<laptop>:8080`. With Tailscale on both, `tailscale serve --bg
+8080` serves it over HTTPS on the tailnet.
+
 CI (`.github/workflows/web.yml`) builds it for every pull request and publishes
 it to GitHub Pages from `master`. nannou is vendored in `vendor/nannou` with
 fixes for the web build; see the note in `Cargo.toml`.
