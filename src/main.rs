@@ -525,11 +525,16 @@ fn update(app: &App, model: &mut Model) {
     let open = model
         .panel_open
         .unwrap_or_else(|| ctx.content_rect().width() > 700.0);
+    let gap = 10.0;
+    // egui caps a window's content at the screen height, leaving out the frame
+    // and the gap, so a long panel would lose its bottom instead of scrolling.
+    let frame = egui::Frame::window(&ctx.global_style()).total_margin().sum().y;
     let panel = egui::Window::new("Conformal Map")
         // egui remembers a window's size by id; closed it should shrink to the header.
         .id(egui::Id::new(("control window", open)))
         .title_bar(false)
-        .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
+        .anchor(egui::Align2::LEFT_TOP, [gap, gap])
+        .max_height(ctx.content_rect().height() - 2.0 * gap - frame)
         .resizable(false)
         .vscroll(open)
         .show(&ctx, |ui| {
@@ -653,9 +658,9 @@ fn function_editor(ui: &mut egui::Ui, model: &mut Model) {
         }
         None if edited => hint(ui, "your own function · Esc goes back to the example"),
         None => {
-            ui.small(example.about);
+            ui.label(example.about);
             for &(text, url) in example.links {
-                ui.hyperlink_to(egui::RichText::new(text).small(), url);
+                ui.hyperlink_to(text, url);
             }
         }
     }
@@ -709,7 +714,7 @@ fn share_button(ui: &mut egui::Ui, model: &mut Model) {
 
 /// A faint line under a control that lists its shortcuts.
 fn hint(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).small().weak());
+    ui.label(egui::RichText::new(text).weak());
 }
 
 fn controls(ui: &mut egui::Ui, model: &mut Model) {
@@ -819,11 +824,11 @@ fn legend(ui: &mut egui::Ui, coloring: Coloring) {
         Coloring::Source => {
             gradient(ui, |t| source(true, t), ["horizontal: bottom", "", "top"]);
             gradient(ui, |t| source(false, t), ["vertical: left", "", "right"]);
-            ui.small("Follow a line from the grid to its image.");
+            ui.label("Follow a line from the grid to its image.");
         }
         Coloring::Phase => {
             gradient(ui, |t| cyclic(t - 0.5), ["−180°", "0°", "+180°"]);
-            ui.small("arg z of the source point: each line keeps the color it had before the map.");
+            ui.label("arg z of the source point: each line keeps the color it had before the map.");
         }
         Coloring::Stretch => {
             let octaves = 2.0f32.powf(STRETCH_OCTAVES);
@@ -832,11 +837,11 @@ fn legend(ui: &mut egui::Ui, coloring: Coloring) {
                 |t| diverging(2.0 * t - 1.0),
                 [&format!("÷{octaves}"), "×1", &format!("×{octaves}")],
             );
-            ui.small("|f'(z)|: how much f scales lengths near z.");
+            ui.label("|f'(z)|: how much f scales lengths near z.");
         }
         Coloring::Rotation => {
             gradient(ui, |t| cyclic(t - 0.5), ["−180°", "0°", "+180°"]);
-            ui.small("arg f'(z): how far f turns directions near z.");
+            ui.label("arg f'(z): how far f turns directions near z.");
         }
     }
 }
