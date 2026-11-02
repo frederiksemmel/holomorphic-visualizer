@@ -44,25 +44,46 @@ build-remote                                   # same, but only on remote builde
 Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
 
 ## Usage
-* The function to visualize is set in the source code, since there is no
-  function parser. Change `f` at the top of `src/main.rs` (and
-  `FUNCTION_LABEL` next to it):
-  ```rust
-  fn f(z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
-      (1.0 - z) / (1.0 + z) * p
+* The grid is mapped on the GPU: `src/grid.wgsl` evaluates the function for
+  every point, so the grid can be dense. There is
+  no function parser, so change `f` in that shader (and `FUNCTION_LABEL` at the
+  top of `src/main.rs`):
+  ```wgsl
+  fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
+      return cmul(cdiv(ONE - z, ONE + z), p);
   }
   ```
-  `p` is the parameter set with the XY pad. See the
-  [num-complex docs](https://docs.rs/num-complex/latest/num_complex/struct.Complex.html)
-  for the functions you can use.
-* Controls:
-    * `scroll` or drag to move
-    * `shift + scroll` to zoom
-    * `ctrl + scroll` to change the grid resolution
-    * `[w|a|s|d] + scroll` to move that edge of the grid. You can hold
-      more than one at once
-    * `space` to toggle applying the function
-    * `r` to reset the parameter to 1
-    * the control window has sliders for everything, an XY pad for the parameter,
-      and a homotopy slider that blends from the identity (0) to `f` (1)
+  Complex numbers are `vec2(re, im)`. Add and subtract with `+` and `-`; the
+  shader provides `cmul`, `cdiv`, `cexp`, `clog`, `cpow`, `csin`, `ccos` and the
+  constants `ONE` and `I`. `p` is the parameter set with the XY pad.
+* Color modes (`c` cycles them, `1`–`5` pick one):
+    * **White**: plain lines.
+    * **Source**: horizontal lines warm, vertical lines cool, shaded by
+      position, so you can follow each line of the grid to its image.
+    * **Phase**: the hue of each point is the angle `arg z` of where it came
+      from. Peek at the source grid (hold `x`) to see the color wheel, then let
+      go to see where each color went.
+    * **Stretch**: `|f'(z)|`, how much the map scales lengths near each point.
+      Blue shrinks, grey keeps, orange grows.
+    * **Rotation**: `arg f'(z)`, how far the map turns directions near each
+      point, as a color wheel.
 
+    A conformal map acts near each point like multiplying by `f'(z)`, so Stretch
+    and Rotation together show everything the map does locally. The grid
+    shows that right angles are kept.
+* Controls. Most are a key held down while you scroll (mouse wheel or
+  touchpad) or just move the mouse:
+    * drag or scroll to pan, `shift + scroll` to zoom around the cursor, `h` to
+      reset the view
+    * `ctrl + scroll` to make the grid finer or coarser
+    * hold `w` / `a` / `s` / `d` and scroll or move the mouse to drag the top /
+      left / bottom / right edge of the grid. Hold two opposite ones (`a + d`,
+      `w + s`) to slide the grid along, all four to move it
+    * hold `p` and scroll or move the mouse, or right-drag the canvas, to move
+      the parameter `p`; `r` resets it
+    * hold `f` and scroll or move the mouse to blend from the identity to `f`
+      (the homotopy)
+    * `space` toggles applying the function; hold `x` or the "Hold to show
+      source" button to peek at the source grid
+    * the control window has sliders for everything, with these shortcuts
+      written underneath

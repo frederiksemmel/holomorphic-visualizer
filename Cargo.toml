@@ -10,8 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 nannou = { version = "0.20", features = ["egui"] }
-# Only for `MouseScrollUnit`, which nannou doesn't re-export; same version nannou uses.
-bevy_input = { version = "0.19", default-features = false }
+# Same version nannou uses; its derives (shader models) expect `bevy` in scope.
+bevy = { version = "0.19", default-features = false }
 num = "0.4"
 
 [dev-dependencies]
