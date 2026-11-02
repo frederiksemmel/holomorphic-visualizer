@@ -27,7 +27,6 @@ The first build compiles Bevy (~590 crates), so expect a few minutes.
 ```sh
 cargo run --release   # run the visualizer
 cargo test            # unit tests (also: `devenv test`)
-cargo bench           # criterion benchmarks for grid generation
 ```
 
 Inside the shell, cargo is limited to 90% of the CPU cores (`CARGO_BUILD_JOBS`).

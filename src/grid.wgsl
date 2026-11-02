@@ -22,6 +22,8 @@ struct GridParams {
     blend: f32,
     line_width: f32,
     coloring: u32,
+    // Stretch factors beyond 2^±stretch_octaves get the extreme color.
+    stretch_octaves: f32,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: GridParams;
@@ -119,8 +121,6 @@ const COLORING_PHASE: u32 = 2u;
 const COLORING_STRETCH: u32 = 3u;
 const COLORING_ROTATION: u32 = 4u;
 const TAU: f32 = 6.28318530718;
-// Stretch factors beyond 2^±STRETCH_OCTAVES get the extreme color.
-const STRETCH_OCTAVES: f32 = 2.0;
 
 // t in [0, 1], wraps around.
 fn cyclic(t: f32) -> vec3<f32> {
@@ -158,7 +158,7 @@ fn line_color(z: vec2<f32>, horizontal: bool, df: vec2<f32>) -> vec3<f32> {
             return cyclic(atan2(z.y, z.x) / TAU);
         }
         case COLORING_STRETCH: {
-            return diverging(clamp(log2(length(df)) / STRETCH_OCTAVES, -1.0, 1.0));
+            return diverging(clamp(log2(length(df)) / params.stretch_octaves, -1.0, 1.0));
         }
         case COLORING_ROTATION: {
             return cyclic(atan2(df.y, df.x) / TAU);

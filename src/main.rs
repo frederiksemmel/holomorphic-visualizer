@@ -26,7 +26,8 @@ const MAX_DENSITY: f32 = 2048.0;
 const MAX_SEGMENTS: u32 = 1_000_000;
 /// In screen points.
 const LINE_WIDTH: f32 = 1.5;
-/// Matches `STRETCH_OCTAVES` in `src/grid.wgsl`.
+/// Stretch factors beyond 2^±STRETCH_OCTAVES get the extreme color. Sent to
+/// `src/grid.wgsl` in `GridParams`, so the legend and the shader agree.
 const STRETCH_OCTAVES: f32 = 2.0;
 
 const GRID_SHADER: Handle<Shader> = uuid_handle!("b69f3f88-de67-4239-b652-1b805606f44f");
@@ -79,6 +80,7 @@ struct GridParams {
     blend: f32,
     line_width: f32,
     coloring: u32,
+    stretch_octaves: f32,
 }
 
 /// How grid lines are colored. The discriminants are the `COLORING_*`
@@ -146,7 +148,6 @@ struct Model {
     peek: bool,
     /// Cursor position at the last update, for key + mouse-move gestures.
     last_mouse: Vec2,
-    fps: f64,
 }
 
 impl Model {
@@ -233,13 +234,11 @@ fn model(app: &App) -> Model {
         peek_button: false,
         peek: false,
         last_mouse: Vec2::ZERO,
-        fps: 0.0,
     }
 }
 
 fn update(app: &App, model: &mut Model) {
     let ctx = app.egui_for_window(model.window);
-    model.fps = app.fps();
 
     egui::Window::new("Conformal Map")
         .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
@@ -392,12 +391,12 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "hold P + scroll or move the mouse");
 
     ui.separator();
+    // No fps readout: the app only redraws on input, so it would count events.
     hint(
         ui,
         &format!(
-            "{} segments mapped on the GPU · {:.0} fps",
-            model.grid_layout().segment_count(),
-            model.fps
+            "{} segments mapped on the GPU",
+            model.grid_layout().segment_count()
         ),
     );
 }
@@ -606,6 +605,7 @@ fn view(app: &App, model: &Model) {
         blend: model.blend(),
         line_width: LINE_WIDTH,
         coloring: model.coloring as u32,
+        stretch_octaves: STRETCH_OCTAVES,
     };
     // One quad, drawn once per segment; the shader places its corners.
     let grid = draw.shader_model(GridShader { params });

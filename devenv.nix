@@ -19,7 +19,6 @@ let
       ./Cargo.toml
       ./Cargo.lock
       ./src
-      ./benches
     ];
   };
 

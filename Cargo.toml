@@ -14,13 +14,6 @@ nannou = { version = "0.20", features = ["egui"] }
 bevy = { version = "0.19", default-features = false }
 num = "0.4"
 
-[dev-dependencies]
-criterion = "0.8"
-
-[[bench]]
-name = "gridlines"
-harness = false
-
 [profile.dev]
-# Gridline generation is hot; keep debug builds usable.
+# Bevy is slow unoptimized; keep debug builds usable.
 opt-level = 1
