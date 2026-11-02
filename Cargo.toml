@@ -16,6 +16,8 @@ num = "0.4"
 
 [dev-dependencies]
 criterion = "0.8"
+# Checks in tests that generated shader code compiles. Same version as wgpu uses.
+naga = { version = "29", features = ["wgsl-in"] }
 
 [[bench]]
 name = "gridlines"
