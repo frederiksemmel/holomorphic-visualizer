@@ -44,7 +44,7 @@ pub fn clip_to_view(
 /// The grid as the GPU draws it: every grid line is cut into straight segments
 /// and each segment is one instance of a quad.
 ///
-/// `segment(i)` must match the `segment` function in `src/grid.wgsl`.
+/// `segment(i)` must match `line_of` and `point` in `src/grid.wgsl`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridLayout {
     /// Lower-left and upper-right grid crossings.
