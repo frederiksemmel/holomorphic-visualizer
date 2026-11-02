@@ -8,8 +8,9 @@
 use crate::examples::EXAMPLES;
 use num::Complex;
 
-/// Screen points per unit length in a fresh view.
-pub const DEFAULT_PIXELS_PER_UNIT: f32 = 150.0;
+/// Largest zoom a fresh view picks, in screen points per unit length, so a
+/// small example on a big screen doesn't fill it with a few fat cells.
+pub const MAX_FITTED_PIXELS_PER_UNIT: f32 = 400.0;
 /// Grid density of a fresh view: `2^resolution` lines per unit.
 pub const DEFAULT_RESOLUTION: f32 = 2.0;
 
@@ -70,9 +71,9 @@ pub struct Scene {
     pub grid: [f32; 4],
     pub resolution: f32,
     pub coloring: Coloring,
-    /// Offset of the complex plane, in plane units.
-    pub position: [f32; 2],
-    pub pixels_per_unit: f32,
+    /// Where the user has looked, or `None` for a fresh view that fits the
+    /// example to the screen (see [`fitted_pixels_per_unit`]).
+    pub view: Option<View>,
     /// Blend from the identity (0) to `f` (1), or `None` while the
     /// identity-to-`f` animation plays.
     pub homotopy: Option<f32>,
@@ -89,8 +90,7 @@ impl Scene {
             grid: example.grid,
             resolution: DEFAULT_RESOLUTION,
             coloring: Coloring::default(),
-            position: [0.0, 0.0],
-            pixels_per_unit: DEFAULT_PIXELS_PER_UNIT,
+            view: None,
             homotopy: None,
         }
     }
@@ -120,7 +120,9 @@ impl Scene {
             self.coloring.label().to_ascii_lowercase(),
             base.coloring.label().to_ascii_lowercase(),
         );
-        add("view", self.view(), base.view());
+        if let Some(view) = self.view {
+            fields.push(format!("view={}", view.to_field()));
+        }
         if let Some(t) = self.homotopy {
             fields.push(format!("t={}", number(t, 3)));
         }
@@ -168,8 +170,10 @@ impl Scene {
                 }
                 "view" => {
                     if let Some([x, y, pixels_per_unit]) = numbers(&value) {
-                        scene.position = [x, y];
-                        scene.pixels_per_unit = pixels_per_unit;
+                        scene.view = Some(View {
+                            position: [x, y],
+                            pixels_per_unit,
+                        });
                     }
                 }
                 "t" => {
@@ -183,8 +187,20 @@ impl Scene {
         scene
     }
 
+}
+
+/// The part of the plane on screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    /// Offset of the complex plane, in plane units.
+    pub position: [f32; 2],
+    /// Screen points per unit length.
+    pub pixels_per_unit: f32,
+}
+
+impl View {
     /// Position and zoom, precise to a fraction of a screen point.
-    fn view(&self) -> String {
+    fn to_field(self) -> String {
         let decimals = (self.pixels_per_unit.max(1.0).log10().ceil() as usize + 1).clamp(2, 7);
         format!(
             "{},{},{}",
@@ -193,6 +209,13 @@ impl Scene {
             number(self.pixels_per_unit, 1)
         )
     }
+}
+
+/// The zoom of a fresh view: the disk of `radius` around 0 just fits the
+/// shorter side of a `screen` (in points), up to [`MAX_FITTED_PIXELS_PER_UNIT`].
+pub fn fitted_pixels_per_unit(radius: f32, screen: [f32; 2]) -> f32 {
+    let half_side = screen[0].min(screen[1]) / 2.0;
+    (half_side / radius).clamp(1.0, MAX_FITTED_PIXELS_PER_UNIT)
 }
 
 /// `x` with up to `decimals` decimals, without trailing zeros.
@@ -298,8 +321,10 @@ mod tests {
             grid: [-2.0, 0.5, -1.25, 3.0],
             resolution: 3.5,
             coloring: Coloring::Stretch,
-            position: [0.125, -2.0],
-            pixels_per_unit: 600.0,
+            view: Some(View {
+                position: [0.125, -2.0],
+                pixels_per_unit: 600.0,
+            }),
             homotopy: Some(0.5),
             ..Scene::example(4)
         };
@@ -316,6 +341,15 @@ mod tests {
             ..Scene::example(0)
         };
         assert_eq!(scene.to_fragment(), "p=1.2346,0&t=1");
+    }
+
+    #[test]
+    fn fresh_views_fit_the_shorter_side() {
+        // A phone: 390 points wide, so radius 3 gets 65 points per unit.
+        assert_eq!(fitted_pixels_per_unit(3.0, [390.0, 844.0]), 65.0);
+        assert_eq!(fitted_pixels_per_unit(2.0, [1200.0, 800.0]), 200.0);
+        // Small examples on big screens stop at the cap.
+        assert_eq!(fitted_pixels_per_unit(0.5, [3840.0, 2160.0]), MAX_FITTED_PIXELS_PER_UNIT);
     }
 
     #[test]

@@ -16,6 +16,9 @@ pub struct Example {
     /// x min, x max, y min, y max.
     pub grid: [f32; 4],
     pub parameter: Complex<f32>,
+    /// How far from 0 the grid and its image reach, roughly: a fresh view
+    /// fits the disk of this radius to the screen.
+    pub radius: f32,
 }
 
 /// The functions on offer in the control window.
@@ -29,6 +32,7 @@ pub const EXAMPLES: [Example; 6] = [
         links: &[],
         grid: [0.0, 1.0, 0.0, 1.0],
         parameter: Complex::new(1.0, 0.0),
+        radius: 1.5,
     },
     Example {
         name: "Exponential",
@@ -39,6 +43,7 @@ pub const EXAMPLES: [Example; 6] = [
         links: &[],
         grid: [-1.0, 1.0, -3.0, 3.0],
         parameter: Complex::new(1.0, 0.0),
+        radius: 3.0,
     },
     Example {
         name: "Power",
@@ -49,6 +54,7 @@ pub const EXAMPLES: [Example; 6] = [
         links: &[],
         grid: [0.5, 1.0, -1.0, 1.0],
         parameter: Complex::new(3.0, 0.0),
+        radius: 3.0,
     },
     Example {
         name: "Sine",
@@ -59,6 +65,7 @@ pub const EXAMPLES: [Example; 6] = [
         links: &[],
         grid: [-1.5, 1.5, -1.0, 1.0],
         parameter: Complex::new(1.0, 0.0),
+        radius: 2.4,
     },
     Example {
         name: "Joukowski",
@@ -70,6 +77,7 @@ pub const EXAMPLES: [Example; 6] = [
         links: &[],
         grid: [-2.0, 2.0, -2.0, 2.0],
         parameter: Complex::new(1.0, 0.0),
+        radius: 2.8,
     },
     Example {
         name: "Escher",
@@ -97,5 +105,6 @@ pub const EXAMPLES: [Example; 6] = [
         ],
         grid: [-12.0, -1.0, -3.0, 3.25],
         parameter: Complex::new(1.0, 0.0),
+        radius: 2.2,
     },
 ];

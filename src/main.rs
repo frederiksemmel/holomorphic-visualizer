@@ -2,7 +2,7 @@ use bevy::asset::{Assets, uuid_handle};
 use bevy::input::{ButtonInput, mouse::MouseScrollUnit, touch::TouchPhase};
 use conformal_visualizer::examples::EXAMPLES;
 use conformal_visualizer::expr::{self, ParseError};
-use conformal_visualizer::scene::{Coloring, DEFAULT_PIXELS_PER_UNIT, DEFAULT_RESOLUTION, Scene};
+use conformal_visualizer::scene::{Coloring, DEFAULT_RESOLUTION, Scene, View, fitted_pixels_per_unit};
 use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph};
 use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
@@ -18,6 +18,9 @@ const DOMAIN_LIMIT: f32 = 15.0;
 /// Zoom limits, in screen points per unit. Positions are f32, so panning loses
 /// about |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
 const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=1_000_000.0;
+/// Gestures that don't follow the cursor (moving p, dragging the edges of the
+/// mapped grid) move one unit per this many screen points, whatever the zoom.
+const DEFAULT_PIXELS_PER_UNIT: f32 = 150.0;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range.
 const HOMOTOPY_TRAVEL: f32 = 300.0;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
@@ -201,6 +204,11 @@ struct Model {
     new_function: Option<String>,
     /// Screen points per unit length in the complex plane.
     pixels_per_unit: f32,
+    /// The view as `fit_view` last fitted it; while the user hasn't moved
+    /// away from it, links leave the view out and it follows the screen size.
+    fitted: Option<View>,
+    /// `fit_view` should fit the view on the next update.
+    fit_due: bool,
     /// Offset of the complex plane, in plane units.
     position: Vec2,
     apply_function: bool,
@@ -318,8 +326,7 @@ impl Model {
             grid: [self.x_min, self.x_max, self.y_min, self.y_max],
             resolution: self.resolution,
             coloring: self.coloring,
-            position: self.position.to_array(),
-            pixels_per_unit: self.pixels_per_unit,
+            view: (!self.fit_due && self.fitted != Some(self.view())).then(|| self.view()),
             homotopy: (self.morph == Morph::Off).then_some(self.homotopy),
         }
     }
@@ -333,10 +340,17 @@ impl Model {
         self.parameter = scene.parameter;
         self.resolution = scene.resolution.clamp(0.0, MAX_UI_RESOLUTION);
         self.coloring = scene.coloring;
-        self.position = Vec2::from_array(scene.position);
-        self.pixels_per_unit = scene
-            .pixels_per_unit
-            .clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
+        match scene.view {
+            Some(view) => {
+                self.position = Vec2::from_array(view.position);
+                self.pixels_per_unit = view
+                    .pixels_per_unit
+                    .clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
+                self.fit_due = false;
+                self.fitted = None;
+            }
+            None => self.reset_view(),
+        }
         (self.homotopy, self.morph) = match scene.homotopy {
             Some(homotopy) => (homotopy, Morph::Off),
             None => (0.0, Morph::Starting(0.0)),
@@ -367,9 +381,32 @@ impl Model {
         self.parameter = EXAMPLES[self.example].parameter;
     }
 
+    /// Back to a fresh view: the example fitted to the screen, on the next update.
     fn reset_view(&mut self) {
-        self.pixels_per_unit = DEFAULT_PIXELS_PER_UNIT;
         self.position = Vec2::ZERO;
+        self.fit_due = true;
+    }
+
+    fn view(&self) -> View {
+        View {
+            position: self.position.to_array(),
+            pixels_per_unit: self.pixels_per_unit,
+        }
+    }
+
+    /// Fits a fresh view to `screen` (in points), and keeps it fitted while
+    /// the user hasn't moved it: on the web the window gets its real size a
+    /// few frames in, and a phone can turn.
+    fn fit_view(&mut self, screen: Vec2) {
+        let untouched = self.fitted == Some(self.view());
+        if screen.min_element() < 1.0 || !(self.fit_due || untouched) {
+            return;
+        }
+        let radius = EXAMPLES[self.example].radius;
+        self.position = Vec2::ZERO;
+        self.pixels_per_unit = fitted_pixels_per_unit(radius, screen.to_array());
+        self.fitted = Some(self.view());
+        self.fit_due = false;
     }
 
     /// Zooms by `factor`, keeping the plane point under `anchor` (screen points) in place.
@@ -445,7 +482,10 @@ fn model(app: &App) -> Model {
         formula_error: None,
         // GridShaderPlugin starts the shader with this example.
         new_function: None,
-        pixels_per_unit: DEFAULT_PIXELS_PER_UNIT,
+        // `set_scene` below asks for the view to be fitted on the first update.
+        pixels_per_unit: 150.0,
+        fitted: None,
+        fit_due: true,
         position: Vec2::ZERO,
         apply_function: true,
         resolution: DEFAULT_RESOLUTION,
@@ -510,6 +550,7 @@ fn update(app: &App, model: &mut Model) {
     let ctx = app.egui_for_window(model.window);
     let window = app.window_rect();
     model.half_view = 0.5 * vec2(window.w(), window.h());
+    model.fit_view(app.main_window().size_points());
 
     // Phones get the canvas first; the panel opens from its header.
     let open = model
