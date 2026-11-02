@@ -15,14 +15,9 @@ bevy = { version = "0.19", default-features = false }
 num = "0.4"
 
 [dev-dependencies]
-criterion = "0.8"
 # Checks in tests that generated shader code compiles. Same version as wgpu uses.
 naga = { version = "29", features = ["wgsl-in"] }
 
-[[bench]]
-name = "gridlines"
-harness = false
-
 [profile.dev]
-# Gridline generation is hot; keep debug builds usable.
+# Bevy is slow unoptimized; keep debug builds usable.
 opt-level = 1
