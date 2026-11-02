@@ -1,7 +1,7 @@
 use bevy::asset::{Assets, uuid_handle};
 use bevy::input::{ButtonInput, mouse::MouseScrollUnit, touch::TouchPhase};
 use conformal_visualizer::expr::{self, ParseError};
-use conformal_visualizer::{COMPLEX_WGSL, GridLayout};
+use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view};
 use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
 use num::Complex;
@@ -180,6 +180,9 @@ struct GridParams {
     line_width: f32,
     coloring: u32,
     stretch_octaves: f32,
+    domain_min: Vec2,
+    domain_max: Vec2,
+    half_view: Vec2,
 }
 
 /// How grid lines are colored. The discriminants are the `COLORING_*`
@@ -255,6 +258,8 @@ struct Model {
     peek: bool,
     /// Cursor position at the last update, for key + mouse-move gestures.
     last_mouse: Vec2,
+    /// Half the window size, in screen points.
+    half_view: Vec2,
     /// Fingers on the canvas (by touch id) and where they were last seen.
     touches: Vec<(u64, Vec2)>,
     /// Screen area of the control window, in points from the top left.
@@ -262,13 +267,46 @@ struct Model {
 }
 
 impl Model {
+    /// The whole grid, on screen or not.
+    fn full_layout(&self) -> GridLayout {
+        let (min, max) = self.domain();
+        Self::layout(self.resolution, min, max)
+    }
+
+    /// The grid to draw. Unmapped, only the part inside the window can be
+    /// seen, so only that part is laid out and the whole segment budget goes
+    /// to it: zoomed in, the lines stay smooth. Mapped, lines from anywhere can
+    /// land on screen; the shader drops the ones that do not.
     fn grid_layout(&self) -> GridLayout {
+        let (mut min, mut max) = self.domain();
+        if self.blend() == 0.0 {
+            let half = self.half_view / self.pixels_per_unit;
+            let (view_min, view_max) = (-half - self.position, half - self.position);
+            (min, max) = clip_to_view(
+                self.resolution,
+                min,
+                max,
+                Complex::new(view_min.x, view_min.y),
+                Complex::new(view_max.x, view_max.y),
+            );
+        }
+        Self::layout(self.resolution, min, max)
+    }
+
+    fn domain(&self) -> (Complex<f32>, Complex<f32>) {
+        (
+            Complex::new(self.x_min, self.y_min),
+            Complex::new(self.x_max, self.y_max),
+        )
+    }
+
+    fn layout(resolution: f32, min: Complex<f32>, max: Complex<f32>) -> GridLayout {
         GridLayout::new(
-            self.resolution,
-            self.x_min,
-            self.x_max,
-            self.y_min,
-            self.y_max,
+            resolution,
+            min.re,
+            max.re,
+            min.im,
+            max.im,
             MAX_DENSITY,
             MAX_SEGMENTS,
         )
@@ -382,6 +420,7 @@ fn model(app: &App) -> Model {
         peek_button: false,
         peek: false,
         last_mouse: Vec2::ZERO,
+        half_view: vec2(600.0, 400.0),
         touches: Vec::new(),
         panel: egui::Rect::NOTHING,
     }
@@ -389,6 +428,8 @@ fn model(app: &App) -> Model {
 
 fn update(app: &App, model: &mut Model) {
     let ctx = app.egui_for_window(model.window);
+    let window = app.window_rect();
+    model.half_view = 0.5 * vec2(window.w(), window.h());
 
     // Phones get the canvas first; the panel opens from its title bar.
     let wide = ctx.content_rect().width() > 700.0;
@@ -848,6 +889,7 @@ fn view(app: &App, model: &Model) {
     }
 
     let layout = model.grid_layout();
+    let domain = model.full_layout();
     let segments = layout.segment_count();
     if segments == 0 {
         return;
@@ -866,6 +908,9 @@ fn view(app: &App, model: &Model) {
         line_width: LINE_WIDTH,
         coloring: model.coloring as u32,
         stretch_octaves: STRETCH_OCTAVES,
+        domain_min: vec2(domain.min.re, domain.min.im),
+        domain_max: vec2(domain.max.re, domain.max.im),
+        half_view: model.half_view,
     };
     // One quad, drawn once per segment; the shader places its corners.
     let grid = draw.shader_model(GridShader { params });

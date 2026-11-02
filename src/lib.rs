@@ -8,6 +8,39 @@ pub const COMPLEX_WGSL: &str = include_str!("complex.wgsl");
 /// Highest grid refinement level; `2^MAX_RESOLUTION` lines per unit.
 pub const MAX_RESOLUTION: f32 = 7.0;
 
+/// The refinement level `resolution` asks for: `2^level` lines per unit.
+fn level(resolution: f32) -> i32 {
+    resolution.floor().clamp(0.0, MAX_RESOLUTION) as i32
+}
+
+/// The part of the grid domain `[min, max]` that a view of `[view_min,
+/// view_max]` needs: its lines inside the view, plus the next line out on each
+/// side, so lines that cross the view still reach its edges.
+///
+/// Only valid while the grid is drawn unmapped; under a map, lines from
+/// anywhere in the domain can land in the view.
+pub fn clip_to_view(
+    resolution: f32,
+    min: Complex<f32>,
+    max: Complex<f32>,
+    view_min: Complex<f32>,
+    view_max: Complex<f32>,
+) -> (Complex<f32>, Complex<f32>) {
+    let lines_per_unit = 2.0f32.powi(level(resolution));
+    let outward_down = |v: f32| (v * lines_per_unit).floor() / lines_per_unit;
+    let outward_up = |v: f32| (v * lines_per_unit).ceil() / lines_per_unit;
+    (
+        Complex::new(
+            min.re.max(outward_down(view_min.re)),
+            min.im.max(outward_down(view_min.im)),
+        ),
+        Complex::new(
+            max.re.min(outward_up(view_max.re)),
+            max.im.min(outward_up(view_max.im)),
+        ),
+    )
+}
+
 /// The grid as the GPU draws it: every grid line is cut into straight segments
 /// and each segment is one instance of a quad.
 ///
@@ -48,7 +81,7 @@ impl GridLayout {
                 ((max - min) * lines_per_unit).round() as u32 + 1
             }
         };
-        let mut level = resolution.floor().clamp(0.0, MAX_RESOLUTION) as i32;
+        let mut level = level(resolution);
         let (spacing, min, max, h_lines, v_lines) = loop {
             let lines_per_unit = 2.0f32.powi(level);
             let snap_up = |v: f32| (v * lines_per_unit).ceil() / lines_per_unit;
@@ -168,6 +201,32 @@ mod tests {
                 assert!(layout.segment_count() <= max_segments, "{layout:?}");
             }
         }
+    }
+
+    fn clipped_layout(view_min: Complex<f32>, view_max: Complex<f32>) -> GridLayout {
+        let (min, max) = (Complex::new(-15.0, -15.0), Complex::new(15.0, 15.0));
+        let (min, max) = clip_to_view(0.0, min, max, view_min, view_max);
+        GridLayout::new(0.0, min.re, max.re, min.im, max.im, 4.0, u32::MAX)
+    }
+
+    #[test]
+    fn clipping_keeps_the_visible_lines_and_one_more_on_each_side() {
+        let layout = clipped_layout(Complex::new(-1.5, 0.2), Complex::new(2.5, 0.7));
+        // x = -2..=3 and y = 0..=1, so horizontal lines run past both view edges.
+        assert_eq!((layout.min, layout.max), (Complex::new(-2.0, 0.0), Complex::new(3.0, 1.0)));
+        assert_eq!((layout.v_lines, layout.h_lines), (6, 2));
+    }
+
+    #[test]
+    fn clipping_never_grows_the_domain() {
+        let layout = clipped_layout(Complex::new(-100.0, -100.0), Complex::new(100.0, 100.0));
+        assert_eq!((layout.min, layout.max), (Complex::new(-15.0, -15.0), Complex::new(15.0, 15.0)));
+    }
+
+    #[test]
+    fn a_view_beside_the_domain_draws_nothing() {
+        let layout = clipped_layout(Complex::new(20.0, 0.0), Complex::new(30.0, 1.0));
+        assert_eq!(layout.segment_count(), 0);
     }
 
     #[test]
