@@ -369,8 +369,27 @@ impl Model {
         self.position = anchor / self.pixels_per_unit - under_anchor;
     }
 
+    /// Grid units per screen point for gestures that drag the grid edges.
+    /// Unmapped, an edge follows the cursor. Mapped, the zoom says nothing
+    /// about how far a source edge moves on screen (and far zoomed in, 1:1
+    /// would barely move it), so edges move at the default zoom's rate.
+    fn edge_units_per_point(&self) -> f32 {
+        if self.blend() == 0.0 {
+            1.0 / self.pixels_per_unit
+        } else {
+            1.0 / DEFAULT_PIXELS_PER_UNIT
+        }
+    }
+
+    /// Moves p by `delta` screen points. p is not a point on screen, so this
+    /// ignores the zoom.
+    fn move_parameter(&mut self, delta: Vec2) {
+        let delta = delta / DEFAULT_PIXELS_PER_UNIT;
+        self.parameter += Complex::new(delta.x, delta.y);
+    }
+
     /// Moves each grid edge whose key is held (W/A/S/D: top, left, bottom,
-    /// right) by `delta` plane units. Returns whether any edge key was held.
+    /// right) by `delta` grid units. Returns whether any edge key was held.
     fn move_edges(&mut self, keys: &ButtonInput<KeyCode>, delta: Vec2) -> bool {
         let mut held = false;
         for (key, edge, step) in [
@@ -487,10 +506,9 @@ fn mouse_drag(app: &App, model: &mut Model, over_ui: bool) {
         model.drag = None;
         return;
     }
-    let delta = (mouse - from) / model.pixels_per_unit;
     match button {
-        MouseButton::Left => model.position += delta,
-        _ => model.parameter += Complex::new(delta.x, delta.y),
+        MouseButton::Left => model.position += (mouse - from) / model.pixels_per_unit,
+        _ => model.move_parameter(mouse - from),
     }
     model.drag = Some((button, mouse));
 }
@@ -506,10 +524,9 @@ fn key_gesture(
     delta: Vec2,
     edge_delta: Vec2,
 ) -> bool {
-    let plane = delta / model.pixels_per_unit;
-    let mut used = model.move_edges(keys, edge_delta / model.pixels_per_unit);
+    let mut used = model.move_edges(keys, edge_delta * model.edge_units_per_point());
     if keys.pressed(KeyCode::KeyP) {
-        model.parameter += Complex::new(plane.x, plane.y);
+        model.move_parameter(delta);
         used = true;
     }
     if keys.pressed(KeyCode::KeyF) {
