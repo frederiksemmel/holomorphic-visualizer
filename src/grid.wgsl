@@ -24,6 +24,8 @@ struct GridParams {
     coloring: u32,
     // Stretch factors beyond 2^±stretch_octaves get the extreme color.
     stretch_octaves: f32,
+    // Which case of `f` to draw.
+    example: u32,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: GridParams;
@@ -56,10 +58,35 @@ fn ccos(z: vec2<f32>) -> vec2<f32> {
     return vec2(cos(z.x) * cosh(z.y), -sin(z.x) * sinh(z.y));
 }
 
-// The function being visualized. Change this to look at a different map, and
-// update FUNCTION_LABEL in src/main.rs to match.
+// log 256: Escher's Print Gallery repeats itself, straightened out, when scaled by 256.
+const LOG_256: f32 = 5.54517744448;
+
+// The functions being visualized, picked by `params.example`. Case i is
+// `EXAMPLES[i]` in src/main.rs; add a case there and here to add a function.
 fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
-    return cmul(cdiv(ONE - z, ONE + z), p);
+    switch params.example {
+        case 1u: {
+            return cexp(cmul(p, z));
+        }
+        case 2u: {
+            return cpow(z, p);
+        }
+        case 3u: {
+            return cmul(p, csin(z));
+        }
+        case 4u: {
+            return z + cdiv(p, z);
+        }
+        case 5u: {
+            // Escher's map w ↦ w^(1/α) with α = (2πi + log 256) / 2πi (see de Smit
+            // and Lenstra), applied to w = exp(z): z is a log coordinate.
+            let inverse_alpha = cdiv(vec2(0.0, TAU), vec2(LOG_256, TAU));
+            return cmul(p, cexp(cmul(z, inverse_alpha)));
+        }
+        default: {
+            return cmul(cdiv(ONE - z, ONE + z), p);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -7,17 +7,48 @@ Built with [nannou](https://nannou.cc) 0.20 (on Bevy) and its egui integration.
 
 ## Examples
 
-The exponential function of course looks like this:
-![exp(z)](/examples/exponential.png)
+Pick one from the **Example** menu in the control window, or press `e` to step
+through them. Each brings its own grid and parameter. The screenshots use the
+Source coloring (`2`): horizontal lines warm, vertical lines cool.
 
-While z^3 looks like this shape when applied to a tall rectangle just right of 0:
-![z^3](/examples/z^3.png)
+The basic one is a Möbius transformation, p · (1 − z)/(1 + z), applied to the
+unit square. It should be called a Mickey Mouse function, as every Möbius
+transformation contains a Mickey Mouse (unproven conjecture).
 
-This is a Möbius Transformation, in particular (1-z)/(1+z), but it should be called
-a Mickey Mouse function, as every Möbius Transformation contains a Mickey Mouse 
-(unproven Conjecture)
+![Möbius transformation](examples/mobius.png)
 
-![mickey_mouse](/examples/mickey_mouse.png)
+The coolest one is M. C. Escher's
+[Print Gallery](https://en.wikipedia.org/wiki/Print_Gallery_(M._C._Escher))
+(1956): a young man in a gallery looks at a print of a town that contains the
+gallery he is standing in. De Smit and Lenstra worked out the math in
+[The Mathematical Structure of Escher's Print Gallery](https://pub.math.leidenuniv.nl/~smitbde/papers/2003-de_smit-lenstra-escher.pdf)
+(Notices of the AMS, 2003). Escher started from a straight picture that
+contains itself, scaled down by 256, and curled it with
+
+$$w \mapsto w^{1/\alpha}, \qquad \alpha = \frac{2\pi i + \log 256}{2\pi i} \approx 1 - 0.8825i,$$
+
+so that one turn around the centre zooms in by 256. His picture contains a copy
+of itself shrunk by 22.58 and turned by 157.6°, so it zooms in forever while
+circling the origin. The grid here is the straight picture in log coordinates,
+w = exp(z): vertical lines are circles around its centre, horizontal lines are
+rays. The map draws them the way Escher curled them:
+
+![Escher's Print Gallery map](examples/escher.png)
+
+Zoom in on the centre (`shift + scroll`) and the spiral keeps going:
+
+![Escher's Print Gallery map, zoomed in](examples/escher-zoom.png)
+
+z³ applied to a tall rectangle just right of 0 (the Power example, z^p with
+p = 3) wraps the band around the origin:
+
+![z^3](examples/power.png)
+
+The others: exp(p · z), p · sin z and the Joukowski map z + p / z.
+
+![exp(z)](examples/exponential.png)
+![sin z](examples/sine.png)
+![Joukowski map](examples/joukowski.png)
 
 ## Development
 
@@ -58,12 +89,17 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
 
 ## Usage
 * The grid is mapped on the GPU: `src/grid.wgsl` evaluates the function for
-  every point, so the grid can be dense. There is
-  no function parser, so change `f` in that shader (and `FUNCTION_LABEL` at the
-  top of `src/main.rs`):
+  every point, so the grid can be dense. There is no function parser. To add a
+  function, add a case to `f` in that shader and an entry at the same index to
+  `EXAMPLES` at the top of `src/main.rs` (name, formula, grid, parameter):
   ```wgsl
   fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {
-      return cmul(cdiv(ONE - z, ONE + z), p);
+      switch params.example {
+          case 1u: {
+              return cexp(cmul(p, z));
+          }
+          // ...
+      }
   }
   ```
   Complex numbers are `vec2(re, im)`. Add and subtract with `+` and `-`; the
@@ -97,9 +133,10 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       `ctrl + a + scroll` works the same, and the touchpad stays on. This goes
       for `p` and `f` below too
     * hold `p` and scroll or move the mouse, or right-drag the canvas, to move
-      the parameter `p`; `r` resets it
+      the parameter `p`; `r` resets it to the example's value
     * hold `f` and scroll or move the mouse to blend from the identity to `f`
       (the homotopy)
+    * `e` steps to the next example
     * `space` toggles applying the function; hold `x` or the "Hold to show
       source" button to peek at the source grid
     * the control window has sliders for everything, with these shortcuts

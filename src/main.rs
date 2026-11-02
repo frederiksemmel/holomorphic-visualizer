@@ -5,9 +5,91 @@ use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
 use num::Complex;
 
-/// Shown in the control window; keep in sync with `f` in `src/grid.wgsl`,
-/// which is where the function being visualized lives.
-const FUNCTION_LABEL: &str = "f(z) = p · (1 − z) / (1 + z)";
+/// A function to look at, with a grid and parameter that show it well.
+struct Example {
+    name: &'static str,
+    formula: &'static str,
+    about: &'static str,
+    /// Further reading: (link text, URL).
+    links: &'static [(&'static str, &'static str)],
+    /// x min, x max, y min, y max.
+    grid: [f32; 4],
+    parameter: Complex<f32>,
+}
+
+/// The functions on offer. `EXAMPLES[i]` is case `i` of `f` in `src/grid.wgsl`,
+/// which is where they are evaluated.
+const EXAMPLES: [Example; 6] = [
+    Example {
+        name: "Möbius",
+        formula: "f(z) = p · (1 − z) / (1 + z)",
+        about: "A Möbius transformation: it maps lines and circles to lines and circles. \
+                Every Möbius transformation contains a Mickey Mouse (unproven conjecture).",
+        links: &[],
+        grid: [0.0, 1.0, 0.0, 1.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Exponential",
+        formula: "f(z) = exp(p · z)",
+        about: "Horizontal lines become rays, vertical lines become circles. \
+                The strip of height 2π wraps once around the origin.",
+        links: &[],
+        grid: [-1.0, 1.0, -3.0, 3.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Power",
+        formula: "f(z) = z^p",
+        about: "For real p it multiplies angles at the origin by p. \
+                Try a tall rectangle just right of 0.",
+        links: &[],
+        grid: [0.5, 1.0, -1.0, 1.0],
+        parameter: Complex::new(3.0, 0.0),
+    },
+    Example {
+        name: "Sine",
+        formula: "f(z) = p · sin z",
+        about: "Vertical lines become hyperbolas, horizontal lines ellipses, \
+                all with foci at ±p.",
+        links: &[],
+        grid: [-1.5, 1.5, -1.0, 1.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Joukowski",
+        formula: "f(z) = z + p / z",
+        about: "The Joukowski map, used to model airfoils. It folds the circle |z| = √|p| \
+                onto a segment; inside and outside that circle each cover the rest \
+                of the plane once.",
+        links: &[],
+        grid: [-2.0, 2.0, -2.0, 2.0],
+        parameter: Complex::new(1.0, 0.0),
+    },
+    Example {
+        name: "Escher",
+        formula: "f(z) = p · exp(z)^(1/α)",
+        about: "M. C. Escher's Print Gallery (1956), with α = (2πi + log 256) / 2πi \
+                ≈ 1 − 0.8825i. The straight picture behind it contains itself, scaled \
+                down by 256. Escher's map w ↦ w^(1/α) curls it so that one turn around \
+                the centre zooms by 256: his picture contains a copy of itself shrunk by \
+                22.58 and turned by 157.6°, so it zooms in forever while circling the \
+                origin. The grid is the straight picture in log coordinates, w = exp(z): \
+                vertical lines are circles around its centre, horizontal lines are rays.",
+        links: &[
+            (
+                "Print Gallery on Wikipedia",
+                "https://en.wikipedia.org/wiki/Print_Gallery_(M._C._Escher)",
+            ),
+            (
+                "de Smit & Lenstra: The Mathematical Structure of Escher's Print Gallery",
+                "https://pub.math.leidenuniv.nl/~smitbde/papers/2003-de_smit-lenstra-escher.pdf",
+            ),
+        ],
+        grid: [-12.0, -1.0, -3.0, 3.25],
+        parameter: Complex::new(1.0, 0.0),
+    },
+];
 
 /// Points per scroll "line" for mice that report wheel clicks instead of pixels.
 const POINTS_PER_LINE: f32 = 24.0;
@@ -81,6 +163,7 @@ struct GridParams {
     line_width: f32,
     coloring: u32,
     stretch_octaves: f32,
+    example: u32,
 }
 
 /// How grid lines are colored. The discriminants are the `COLORING_*`
@@ -125,6 +208,8 @@ impl Coloring {
 
 struct Model {
     window: Entity,
+    /// Index into `EXAMPLES`: the function shown.
+    example: usize,
     /// Screen points per unit length in the complex plane.
     pixels_per_unit: f32,
     /// Offset of the complex plane, in plane units.
@@ -176,6 +261,19 @@ impl Model {
         }
     }
 
+    /// Shows `EXAMPLES[index]` with its own grid and parameter.
+    fn set_example(&mut self, index: usize) {
+        let example = &EXAMPLES[index];
+        self.example = index;
+        [self.x_min, self.x_max, self.y_min, self.y_max] = example.grid;
+        self.parameter = example.parameter;
+        self.reset_view();
+    }
+
+    fn reset_parameter(&mut self) {
+        self.parameter = EXAMPLES[self.example].parameter;
+    }
+
     fn reset_view(&mut self) {
         self.pixels_per_unit = DEFAULT_PIXELS_PER_UNIT;
         self.position = Vec2::ZERO;
@@ -225,17 +323,20 @@ fn model(app: &App) -> Model {
     // Only redraw on input; the picture is static otherwise.
     app.set_update_mode(UpdateMode::wait());
 
+    let example = &EXAMPLES[0];
+    let [x_min, x_max, y_min, y_max] = example.grid;
     Model {
         window,
+        example: 0,
         pixels_per_unit: DEFAULT_PIXELS_PER_UNIT,
         position: Vec2::ZERO,
         apply_function: true,
         resolution: 2.0,
-        x_min: 0.0,
-        x_max: 1.0,
-        y_min: 0.0,
-        y_max: 1.0,
-        parameter: Complex::new(1.0, 0.0),
+        x_min,
+        x_max,
+        y_min,
+        y_max,
+        parameter: example.parameter,
         homotopy: 1.0,
         coloring: Coloring::default(),
         drag: None,
@@ -324,13 +425,36 @@ fn key_gesture(
     used
 }
 
+/// Picks the function to show, and says what it is.
+fn example_picker(ui: &mut egui::Ui, model: &mut Model) {
+    let mut index = model.example;
+    egui::ComboBox::from_label("Example")
+        .selected_text(EXAMPLES[index].name)
+        .show_ui(ui, |ui| {
+            for (i, example) in EXAMPLES.iter().enumerate() {
+                ui.selectable_value(&mut index, i, example.name);
+            }
+        });
+    if index != model.example {
+        model.set_example(index);
+    }
+    hint(ui, "next: E · picking one resets the grid, p and the view");
+
+    let example = &EXAMPLES[model.example];
+    ui.monospace(example.formula);
+    ui.small(example.about);
+    for &(text, url) in example.links {
+        ui.hyperlink_to(egui::RichText::new(text).small(), url);
+    }
+}
+
 /// A faint line under a control that lists its shortcuts.
 fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small().weak());
 }
 
 fn controls(ui: &mut egui::Ui, model: &mut Model) {
-    ui.monospace(FUNCTION_LABEL);
+    example_picker(ui, model);
     ui.separator();
 
     ui.horizontal(|ui| {
@@ -388,7 +512,7 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     ui.horizontal(|ui| {
         ui.label("Parameter p");
         if ui.button("Reset").clicked() {
-            model.parameter = Complex::new(1.0, 0.0);
+            model.reset_parameter();
         }
     });
     ui.horizontal(|ui| {
@@ -518,7 +642,8 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
     ];
     match key {
         KeyCode::Space => model.apply_function = !model.apply_function,
-        KeyCode::KeyR => model.parameter = Complex::new(1.0, 0.0),
+        KeyCode::KeyR => model.reset_parameter(),
+        KeyCode::KeyE => model.set_example((model.example + 1) % EXAMPLES.len()),
         KeyCode::KeyH | KeyCode::Home => model.reset_view(),
         KeyCode::KeyC => model.coloring = model.coloring.next(),
         _ => {
@@ -671,6 +796,7 @@ fn view(app: &App, model: &Model) {
         line_width: LINE_WIDTH,
         coloring: model.coloring as u32,
         stretch_octaves: STRETCH_OCTAVES,
+        example: model.example as u32,
     };
     // One quad, drawn once per segment; the shader places its corners.
     let grid = draw.shader_model(GridShader { params });
