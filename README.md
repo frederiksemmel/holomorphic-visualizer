@@ -10,7 +10,8 @@ Built with [nannou](https://nannou.cc) 0.20 (on Bevy) and its egui integration.
 Pick one from the **Example** menu in the control window, or press `e` to step
 through them. Each brings its own grid and parameter, and fills in its formula,
 which you can then edit (see [Usage](#usage)). The screenshots use the
-Source coloring (`2`): horizontal lines warm, vertical lines cool.
+default Phase coloring (`3`): every point keeps the hue of its angle arg z in
+the source grid, so you can see where each direction went.
 
 The basic one is a Möbius transformation, p · (1 − z)/(1 + z), applied to the
 unit square. It should be called a Mickey Mouse function, as every Möbius
@@ -112,8 +113,8 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
     * **White**: plain lines.
     * **Source**: horizontal lines warm, vertical lines cool, shaded by
       position, so you can follow each line of the grid to its image.
-    * **Phase**: the hue of each point is the angle `arg z` of where it came
-      from. Peek at the source grid (hold `x`) to see the color wheel, then let
+    * **Phase** (the default): the hue of each point is the angle `arg z` of
+      where it came from. Peek at the source grid (hold `x`) to see the color wheel, then let
       go to see where each color went.
     * **Stretch**: `|f'(z)|`, how much the map scales lengths near each point.
       Blue shrinks, grey keeps, orange grows.
