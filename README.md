@@ -159,22 +159,23 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
   The CPU evaluates the same parse tree, with the same branch cuts, only for
   the few points the mouse needs, such as which grid border is under it or
   what landed under the cursor.
-* Stages take a function apart into the steps it is composed of. The app reads
-  them off the formula: `sin(cos(p * z))` has the stages `z`, `p·z`,
-  `cos(p·z)` and `sin(cos(p·z))`. Keys `1` to `9` pick a stage and `0` goes back
+* Stages take a function apart into the steps that build it. The app reads
+  them off the formula: `sin(cos(p * z))` has the stages `p·z`, `cos(p·z)` and
+  `sin(cos(p·z))`. Keys `1` to `9` pick a stage and `0` goes back
   to the full function. The control window has a button for each, showing its
   formula, which also reaches stages past 9 and works on a phone.
-    * Stage k shows its own step: the homotopy blends stage k − 1 into stage k.
-      Picking a stage shows it finished, so scrubbing back reveals where it
-      came from and Animate plays that step alone; if the animation is
-      already playing, it goes on from the start of the new stage. Stage 1 is
-      the identity, so there is nothing to blend. In the full function the
-      homotopy goes from the identity to f, start to finish.
+    * Stage k shows its own step: the homotopy blends stage k − 1 into stage k,
+      and stage 1 starts from the identity. Picking a stage shows it finished,
+      so scrubbing back reveals where it came from and Animate plays that step
+      alone; if the animation is already playing, it goes on from the start of
+      the new stage. In the full function the homotopy goes from the identity
+      to f, start to finish.
     * The formula is walked from the outside in, for as long as exactly one
-      operand of a step depends on z. Constants and `p` belong to their step,
-      so `p * z` is one stage. When several operands depend on z, that step
-      stays one stage: `exp(z + 1/z)` has the stages `z`, `z + 1/z` and
-      `exp(z + 1/z)`, and the Möbius example has just two.
+      operand of a step is built from z. Constants, `p` and a bare `z` belong
+      to their step, so `p * z` is one stage and `p * z * z` has the stages
+      `p·z` and `p·z·z`. When several operands are built from z, that step
+      stays one stage: `sin(z) * cos(z)` can't be split, and neither can the
+      Möbius example.
     * The hover readout (`g3(z)` is stage 3), the colors and the mouse all
       follow the stage. Stretch and Rotation show the composition up to the
       stage, not its last step alone. Editing the formula or picking an example

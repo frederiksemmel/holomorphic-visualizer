@@ -93,23 +93,27 @@ impl Function {
         self.0 == Expr::Z
     }
 
-    /// The compositional parts of f, innermost first: the identity, then what
-    /// each layer around z makes of the one before, up to f itself.
+    /// The steps that build f, innermost first, up to f itself. The identity
+    /// is not one of them: it is where the first step starts from.
     ///
-    /// Walking down from the root, a node with exactly one operand that
-    /// depends on z is a layer, and the walk goes on into that operand; the
-    /// other operand (a constant, p) belongs to the layer, so `p * z` is one
-    /// stage. A node with several such operands can't be undone one step at a
-    /// time, so it stays a single stage: exp(z + 1/z) is z, z + 1/z, exp(z + 1/z).
+    /// Walking down from the root, a node with exactly one operand built from
+    /// z is a step, and the walk goes on into that operand. Whatever else it
+    /// holds belongs to the step: a constant, p, or a bare z, which has nothing
+    /// to take apart. So p * z * z, which is (p * z) * z, is p·z then p·z·z.
+    /// A node with several such operands has no single step before it, so
+    /// that is where the walk stops: sin(z) * cos(z) is one stage.
     pub fn stages(&self) -> Vec<Function> {
         let mut stages = vec![self.clone()];
         let mut node = &self.0;
-        while *node != Expr::Z {
-            let mut inner = node.operands().into_iter().filter(|a| a.depends_on_z());
-            node = match (inner.next(), inner.next()) {
-                (Some(only), None) => only,
-                _ => &Expr::Z,
-            };
+        loop {
+            let mut built = node
+                .operands()
+                .into_iter()
+                .filter(|a| **a != Expr::Z && a.depends_on_z());
+            match (built.next(), built.next()) {
+                (Some(only), None) => node = only,
+                _ => break,
+            }
             stages.push(Function(node.clone()));
         }
         stages.reverse();
@@ -162,16 +166,20 @@ pub struct Homotopy {
 
 impl Homotopy {
     /// Stage `stage` of [`Function::stages`], counted from 1 as the keys do:
-    /// the stage before it into this one. Stage 1 has none before it, so it
-    /// stays the identity. Stage 0 is the whole function, from the identity to
-    /// the last stage. `None` if there is no such stage.
+    /// the stage before it into this one, and the identity into stage 1.
+    /// Stage 0 is the whole function, from the identity to the last stage.
+    /// `None` if there is no such stage.
     pub fn of_stage(stages: &[Function], stage: usize) -> Option<Homotopy> {
         let end = match stage {
             0 => stages.last()?,
             k => stages.get(k - 1)?,
         };
+        let start = match stage {
+            0 | 1 => Function(Expr::Z),
+            k => stages[k - 2].clone(),
+        };
         Some(Homotopy {
-            start: stages[stage.saturating_sub(2)].clone(),
+            start,
             end: end.clone(),
         })
     }
@@ -745,16 +753,15 @@ mod tests {
     #[test]
     fn stages_of_the_examples() {
         let expected: [(&str, &[&str]); 6] = [
-            ("exp", &["z", "p·z", "exp(p·z)"]),
-            // Both sides of the division depend on z.
-            ("mobius", &["z", "p·(1 - z)/(1 + z)"]),
-            ("power", &["z", "z^p"]),
-            ("sine", &["z", "sin(z)", "p·sin(z)"]),
-            ("joukowski", &["z", "z + p/z"]),
+            ("exp", &["p·z", "exp(p·z)"]),
+            // Both sides of the division are built from z.
+            ("mobius", &["p·(1 - z)/(1 + z)"]),
+            ("power", &["z^p"]),
+            ("sine", &["sin(z)", "p·sin(z)"]),
+            ("joukowski", &["p/z", "z + p/z"]),
             (
                 "escher",
                 &[
-                    "z",
                     "2·π·i·z",
                     "2·π·i·z/(2·π·i + log(p·e^6))",
                     "exp(2·π·i·z/(2·π·i + log(p·e^6)))",
@@ -772,55 +779,62 @@ mod tests {
     fn a_composition_comes_apart_layer_by_layer() {
         assert_eq!(
             stages("sin(cos(p*z))"),
-            ["z", "p·z", "cos(p·z)", "sin(cos(p·z))"]
+            ["p·z", "cos(p·z)", "sin(cos(p·z))"]
         );
-        assert_eq!(stages("-exp(z)^2"), ["z", "exp(z)", "exp(z)^2", "-exp(z)^2"]);
-        assert_eq!(stages("2^z"), ["z", "2^z"]);
+        assert_eq!(stages("-exp(z)^2"), ["exp(z)", "exp(z)^2", "-exp(z)^2"]);
+        assert_eq!(stages("2^z"), ["2^z"]);
         // By the shape of the tree: `2 * z * p` is (2 * z) * p.
-        assert_eq!(stages("2 * z * p"), ["z", "2·z", "2·z·p"]);
-        assert_eq!(stages("2 * p * z"), ["z", "2·p·z"]);
+        assert_eq!(stages("2 * z * p"), ["2·z", "2·z·p"]);
+        assert_eq!(stages("2 * p * z"), ["2·p·z"]);
     }
 
     #[test]
-    fn several_operands_with_z_make_one_stage() {
-        assert_eq!(stages("exp(z + 1/z)"), ["z", "z + 1/z", "exp(z + 1/z)"]);
-        assert_eq!(stages("z * z"), ["z", "z·z"]);
-        assert_eq!(stages("z^z"), ["z", "z^z"]);
-        assert_eq!(stages("sin(z)cos(z)"), ["z", "sin(z)·cos(z)"]);
+    fn a_bare_z_beside_a_step_does_not_stop_the_walk() {
+        assert_eq!(stages("p*z*z"), ["p·z", "p·z·z"]);
+        assert_eq!(stages("p*z*z*z"), ["p·z", "p·z·z", "p·z·z·z"]);
+        assert_eq!(stages("z*(p*z)"), ["p·z", "z·(p·z)"]);
+        assert_eq!(stages("exp(z + 1/z)"), ["1/z", "z + 1/z", "exp(z + 1/z)"]);
+    }
+
+    #[test]
+    fn several_operands_built_from_z_make_one_stage() {
+        assert_eq!(stages("z * z"), ["z·z"]);
+        assert_eq!(stages("z^z"), ["z^z"]);
+        assert_eq!(stages("sin(z)cos(z)"), ["sin(z)·cos(z)"]);
         // Only the walk from the root counts: what is inside stays whole.
         assert_eq!(
             stages("log(1 + z^2 + exp(z))"),
-            ["z", "1 + z^2 + exp(z)", "log(1 + z^2 + exp(z))"]
+            ["1 + z^2 + exp(z)", "log(1 + z^2 + exp(z))"]
         );
     }
 
     #[test]
-    fn stages_start_at_the_identity_and_end_at_the_formula() {
+    fn stages_leave_out_the_identity_and_end_at_the_formula() {
         let formulas = EXAMPLES.iter().map(|example| example.formula);
         let typed = ["z", "p", "2", "i", "sin(cos(p*z))", "-z", "z + 1", "1/z", "exp(exp(z))"];
         for formula in formulas.chain(typed) {
             let function = parse(formula).unwrap();
             let stages = function.stages();
-            assert!(stages[0].is_identity(), "{formula}");
+            assert_eq!(stages[0].is_identity(), function.is_identity(), "{formula}");
             assert_eq!(stages.last(), Some(&function), "{formula}");
             // No stage twice.
             for pair in stages.windows(2) {
                 assert_ne!(pair[0], pair[1], "{formula}");
             }
         }
-        // Without z the formula is one stage after the identity; z alone is just that.
-        assert_eq!(stages("p + 1"), ["z", "p + 1"]);
+        // Without z the formula is a single stage, and so is z alone.
+        assert_eq!(stages("p + 1"), ["p + 1"]);
         assert_eq!(stages("z"), ["z"]);
     }
 
     #[test]
     fn long_chains_are_many_stages_and_stay_in_order() {
-        assert_eq!(stages("z + 1 + 2 + 3").len(), 4);
+        assert_eq!(stages("z + 1 + 2 + 3").len(), 3);
         let nested = format!("{}z{}", "sin(".repeat(11), ")".repeat(11));
         let all = stages(&nested);
-        assert_eq!(all.len(), 12);
-        assert_eq!(all[1], "sin(z)");
-        assert_eq!(all[11], nested);
+        assert_eq!(all.len(), 11);
+        assert_eq!(all[0], "sin(z)");
+        assert_eq!(all[10], nested);
     }
 
     #[test]
@@ -886,19 +900,18 @@ mod tests {
             (start.to_string(), end.to_string())
         };
         assert_eq!(ends(0), ("z".into(), "sin(cos(p·z))".into()));
-        assert_eq!(ends(1), ("z".into(), "z".into()));
-        assert_eq!(ends(2), ("z".into(), "p·z".into()));
-        assert_eq!(ends(3), ("p·z".into(), "cos(p·z)".into()));
-        assert_eq!(ends(4), ("cos(p·z)".into(), "sin(cos(p·z))".into()));
+        assert_eq!(ends(1), ("z".into(), "p·z".into()));
+        assert_eq!(ends(2), ("p·z".into(), "cos(p·z)".into()));
+        assert_eq!(ends(3), ("cos(p·z)".into(), "sin(cos(p·z))".into()));
         let stages = parse(formula).unwrap().stages();
-        assert_eq!(Homotopy::of_stage(&stages, 5), None);
+        assert_eq!(Homotopy::of_stage(&stages, 4), None);
     }
 
     #[test]
     fn the_map_runs_between_the_two_ends() {
         let p = Complex::new(0.5, -2.0);
         let z = Complex::new(0.3, 0.7);
-        let ends = homotopy("sin(cos(p*z))", 3);
+        let ends = homotopy("sin(cos(p*z))", 2);
         let (start, end) = (p * z, (p * z).cos());
         assert_close(ends.map(z, p, 0.0), start, "t = 0");
         assert_close(ends.map(z, p, 1.0), end, "t = 1");
@@ -935,11 +948,12 @@ mod tests {
     fn only_the_identity_leaves_the_grid_unmapped() {
         let unmapped = |stage, t| homotopy("sin(cos(p*z))", stage).unmapped(t);
         assert!(unmapped(0, 0.0) && !unmapped(0, 0.5) && !unmapped(0, 1.0));
-        // Stage 1 is the identity all the way.
-        assert!(unmapped(1, 0.0) && unmapped(1, 0.5) && unmapped(1, 1.0));
-        assert!(unmapped(2, 0.0) && !unmapped(2, 0.5));
-        // From stage 3 on even t = 0 is mapped.
-        assert!(!unmapped(3, 0.0) && !unmapped(4, 0.0));
+        // Stage 1 starts from the identity.
+        assert!(unmapped(1, 0.0) && !unmapped(1, 0.5) && !unmapped(1, 1.0));
+        // From stage 2 on even t = 0 is mapped.
+        assert!(!unmapped(2, 0.0) && !unmapped(3, 0.0));
+        // The identity itself stays put all the way.
+        assert!(homotopy("z", 1).unmapped(1.0));
     }
 
     #[test]
@@ -950,12 +964,12 @@ mod tests {
 
     #[test]
     fn the_shader_learns_where_the_homotopy_starts() {
-        let wgsl = homotopy("sin(cos(p*z))", 3).to_wgsl();
+        let wgsl = homotopy("sin(cos(p*z))", 2).to_wgsl();
         assert!(wgsl.contains("return cmul(p, z);"), "{wgsl}");
         assert!(wgsl.contains("return ccos(cmul(p, z));"), "{wgsl}");
         assert!(wgsl.contains("START_IS_IDENTITY: bool = false"), "{wgsl}");
         assert!(homotopy("sin(z)", 0).to_wgsl().contains("START_IS_IDENTITY: bool = true"));
-        assert!(homotopy("sin(z)", 2).to_wgsl().contains("START_IS_IDENTITY: bool = true"));
+        assert!(homotopy("sin(z)", 1).to_wgsl().contains("START_IS_IDENTITY: bool = true"));
     }
 
     #[test]

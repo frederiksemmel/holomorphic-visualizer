@@ -1179,7 +1179,7 @@ fn stage_picker(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "keys: 0 for the full function, 1 – 9 for a stage");
     let about = match model.stage {
         0 => "the homotopy goes from the identity to f".to_owned(),
-        1 => "the identity: nothing to blend".to_owned(),
+        1 => format!("the homotopy goes from the identity to g1 = {}", model.ends.end),
         k => format!(
             "the homotopy goes from {} = {} to {} = {}",
             Model::stage_name(k - 1),
@@ -2083,10 +2083,10 @@ mod tests {
     #[test]
     fn digits_pick_stages_and_0_goes_back() {
         let mut model = composition();
-        assert_eq!(model.stages.len(), 4);
+        assert_eq!(model.stages.len(), 3);
         assert_eq!(model.stage, 0);
-        model.pick_stage(3);
-        assert_eq!(model.stage, 3);
+        model.pick_stage(2);
+        assert_eq!(model.stage, 2);
         assert_eq!(model.ends.start.to_string(), "p·z");
         assert_eq!(model.ends.end.to_string(), "cos(p·z)");
         assert_eq!(model.new_function, Some(model.ends.to_wgsl()));
@@ -2122,7 +2122,7 @@ mod tests {
     #[test]
     fn more_than_nine_stages_can_all_be_picked() {
         let mut model = opened("");
-        model.set_formula(format!("{}z{}", "sin(".repeat(11), ")".repeat(11)));
+        model.set_formula(format!("{}z{}", "sin(".repeat(12), ")".repeat(12)));
         assert_eq!(model.stages.len(), 12);
         model.pick_stage(12);
         assert_eq!(model.stage, 12);
@@ -2131,10 +2131,10 @@ mod tests {
     #[test]
     fn editing_the_formula_goes_back_to_the_whole_function() {
         let mut model = composition();
-        model.pick_stage(4);
+        model.pick_stage(3);
         model.set_formula("z^2".into());
         assert_eq!(model.stage, 0);
-        assert_eq!(model.stages.len(), 2);
+        assert_eq!(model.stages.len(), 1);
         assert_eq!(model.ends.end.to_string(), "z^2");
     }
 
@@ -2159,7 +2159,7 @@ mod tests {
         model.pick_stage(3);
         model.set_example(5);
         assert_eq!(model.stage, 0);
-        assert_eq!(model.stages.len(), 4);
+        assert_eq!(model.stages.len(), 3);
         assert!(model.ends.start.is_identity());
     }
 
@@ -2180,8 +2180,8 @@ mod tests {
 
     #[test]
     fn a_link_to_a_stage_that_does_not_exist_shows_the_whole_function() {
-        assert_eq!(opened("f=z^2&stage=2").stage, 2);
-        assert_eq!(opened("f=z^2&stage=3").stage, 0);
+        assert_eq!(opened("f=z^2&stage=1").stage, 1);
+        assert_eq!(opened("f=z^2&stage=2").stage, 0);
         assert_eq!(opened("f=sin(&stage=2").stage, 0);
     }
 
@@ -2223,12 +2223,10 @@ mod tests {
         model.pixels_per_unit = 2000.0;
         let clipped = |model: &Model| model.grid_layout() != model.full_layout();
 
-        model.pick_stage(2);
+        model.pick_stage(1);
         model.homotopy = 0.0;
         assert!(model.unmapped() && clipped(&model));
-        model.pick_stage(1);
-        assert!(model.unmapped() && clipped(&model));
-        model.pick_stage(3);
+        model.pick_stage(2);
         model.homotopy = 0.0;
         assert!(!model.unmapped() && !clipped(&model));
         model.peek = true;
@@ -2239,18 +2237,18 @@ mod tests {
     fn edges_follow_the_cursor_only_on_an_unmapped_grid() {
         let mut model = composition();
         model.pixels_per_unit = 2000.0;
-        model.pick_stage(3);
+        model.pick_stage(2);
         model.homotopy = 0.0;
         assert_eq!(model.edge_units_per_point(), 1.0 / DEFAULT_PIXELS_PER_UNIT);
-        model.pick_stage(2);
+        model.pick_stage(1);
         model.homotopy = 0.0;
         assert_eq!(model.edge_units_per_point(), 1.0 / 2000.0);
     }
 
     #[test]
     fn borders_are_found_where_a_stage_draws_them() {
-        // 2z, stage 2 of sin(2z), finished: the right border is at x = 2.
-        let mut model = opened("f=sin(2z)&grid=-1,1,-1,1&stage=2&t=1");
+        // 2z, stage 1 of sin(2z), finished: the right border is at x = 2.
+        let mut model = opened("f=sin(2z)&grid=-1,1,-1,1&stage=1&t=1");
         model.pixels_per_unit = 100.0;
         let (border, z) = model.nearest_border(vec2(205.0, 40.0)).unwrap();
         assert_eq!(border, Border::XMax);

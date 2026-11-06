@@ -197,9 +197,9 @@ mod tests {
 
     #[test]
     fn a_stage_at_its_start_draws_the_stage_before() {
-        // At t = 0, stage 3 of i(z + 2) draws z + 2: the grid shifted right, not at z.
+        // At t = 0, stage 2 of i(z + 2) draws z + 2: the grid shifted right, not at z.
         let stages = expr::parse("i * (z + 2)").unwrap().stages();
-        let ends = expr::Homotopy::of_stage(&stages, 3).unwrap();
+        let ends = expr::Homotopy::of_stage(&stages, 2).unwrap();
         let p = Complex::new(1.0, 0.0);
         let to_screen = |z| ends.map(z, p, 0.0) * PPU;
         let (border, z) = nearest_border(GRID, &to_screen, Complex::new(310.0, 50.0)).unwrap();
