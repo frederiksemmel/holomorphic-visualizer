@@ -159,6 +159,16 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
   The CPU evaluates the same parse tree, with the same branch cuts, only for
   the few points the mouse needs, such as which grid border is under it or
   what landed under the cursor.
+* Zoom as far as you like. The CPU works in f64, but WebGPU has no f64, and
+  the f32 of the shader would turn the grid blocky from a zoom of about 1e7.
+  So past 1e5 the CPU finds the grid point at the window centre and hands the
+  shader a cubic that follows the map around it, on small numbers, as deep
+  fractal zooms do (`src/patch.rs`). It takes the zoom to about 1e13 at
+  |z| = 1, and much further near the origin.
+    * Where several points land at the window centre (`z^2` has two), only one
+      of them is followed, so the lines of the others disappear from 1e5 on.
+    * At a critical point, or wherever the map bends too much across the
+      window for a cubic, the grid stays as the shader draws it.
 * Stages take a function apart into the steps that build it. The app reads
   them off the formula: `sin(cos(p * z))` has the stages `p·z`, `cos(p·z)` and
   `sin(cos(p·z))`. Keys `1` to `9` pick a stage and `0` goes back

@@ -32,6 +32,20 @@ struct GridParams {
     domain_max: vec2<f32>,
     // Half the window size, in screen points. The origin is the window centre.
     half_view: vec2<f32>,
+    // Not 0: far zoomed in, drawn from the cubic below instead of from g, and
+    // everything about the layout is in u, about one screen point from
+    // `patch_source`. See src/patch.rs.
+    patched: u32,
+    // Source plane units per u.
+    units_per_u: f32,
+    patch_source: vec2<f32>,
+    // Where the first horizontal and vertical line are. Lines stay between
+    // grid_min and grid_max; when zoomed in, the next line can be far away.
+    lines_from: vec2<f32>,
+    cubic0: vec2<f32>,
+    cubic1: vec2<f32>,
+    cubic2: vec2<f32>,
+    cubic3: vec2<f32>,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: GridParams;
@@ -51,6 +65,24 @@ fn g(z: vec2<f32>) -> vec2<f32> {
     }
     let start = f_start(z, params.parameter);
     return start + params.blend * (f(z, params.parameter) - start);
+}
+
+// The patch, on screen.
+fn cubic(u: vec2<f32>) -> vec2<f32> {
+    return params.cubic0 + cmul(u, params.cubic1 + cmul(u, params.cubic2 + cmul(u, params.cubic3)));
+}
+
+fn cubic_prime(u: vec2<f32>) -> vec2<f32> {
+    return params.cubic1 + cmul(u, 2.0 * params.cubic2 + 3.0 * cmul(u, params.cubic3));
+}
+
+// The grid point at a point of the layout, as nearly as f32 can say. Only for
+// colors, which change slowly.
+fn source_of(at: vec2<f32>) -> vec2<f32> {
+    if params.patched != 0u {
+        return params.patch_source + at * params.units_per_u;
+    }
+    return at;
 }
 
 // f'(z) by central differences. f is holomorphic, so any direction works.
@@ -100,7 +132,7 @@ fn line_of(i: u32) -> Line {
         let line = i / params.h_segments;
         l.k = i % params.h_segments;
         l.n = params.h_segments;
-        l.origin = vec2(params.grid_min.x, params.grid_min.y + f32(line) * params.spacing);
+        l.origin = vec2(params.grid_min.x, params.lines_from.y + f32(line) * params.spacing);
         l.step = vec2((params.grid_max.x - params.grid_min.x) / f32(params.h_segments), 0.0);
         l.horizontal = true;
     } else {
@@ -108,7 +140,7 @@ fn line_of(i: u32) -> Line {
         let line = j / params.v_segments;
         l.k = j % params.v_segments;
         l.n = params.v_segments;
-        l.origin = vec2(params.grid_min.x + f32(line) * params.spacing, params.grid_min.y);
+        l.origin = vec2(params.lines_from.x + f32(line) * params.spacing, params.grid_min.y);
         l.step = vec2(0.0, (params.grid_max.y - params.grid_min.y) / f32(params.v_segments));
         l.horizontal = false;
     }
@@ -121,6 +153,9 @@ fn point(l: Line, j: u32) -> vec2<f32> {
 
 // Where point j of the line lands on screen.
 fn mapped(l: Line, j: u32) -> vec2<f32> {
+    if params.patched != 0u {
+        return cubic(point(l, j));
+    }
     return to_screen(g(point(l, j)));
 }
 
@@ -256,6 +291,14 @@ fn finite(a: vec2<f32>, b: vec2<f32>) -> bool {
     return all(abs(a) < vec2(MAX_SCREEN_COORD)) && all(abs(b) < vec2(MAX_SCREEN_COORD));
 }
 
+// A step `along` the layout at `at` as it comes out on screen, where f' is `df`.
+fn tangent(at: vec2<f32>, along: vec2<f32>, df: vec2<f32>) -> vec2<f32> {
+    if params.patched != 0u {
+        return cmul(cubic_prime(at), along);
+    }
+    return cmul(g_prime(at, df), along * params.pixels_per_unit);
+}
+
 @vertex
 fn vertex(
     @builtin(vertex_index) vertex_index: u32,
@@ -300,8 +343,10 @@ fn vertex(
         return out;
     }
 
-    let start_z = point(l, l.k);
-    let end_z = point(l, end);
+    let start = point(l, l.k);
+    let finish = point(l, end);
+    let start_z = source_of(start);
+    let end_z = source_of(finish);
     let df_start = f_prime(start_z);
     let df_end = f_prime(end_z);
     let z = select(start_z, end_z, at_end);
@@ -315,9 +360,8 @@ fn vertex(
     // midpoint near the pole has a huge derivative that excuses any chord.
     // Every corner of the quad must reach the same verdict, so this uses only
     // per-segment values.
-    let step = (end_z - start_z) * params.pixels_per_unit;
-    let tangent_start = cmul(g_prime(start_z, df_start), step);
-    let tangent_end = cmul(g_prime(end_z, df_end), step);
+    let tangent_start = tangent(start, finish - start, df_start);
+    let tangent_end = tangent(finish, finish - start, df_end);
     let chord_vec = b - a;
     let chord = length(chord_vec);
     let expected = max(length(tangent_start), length(tangent_end));

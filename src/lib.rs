@@ -5,6 +5,7 @@ pub mod borders;
 pub mod examples;
 pub mod expr;
 pub mod morph;
+pub mod patch;
 pub mod readout;
 pub mod scene;
 

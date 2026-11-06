@@ -5,6 +5,9 @@
 //! an integer `k` (the line at `k · step`) and labels are written from `k`
 //! exactly, without the rounding of `k as f64 * step`.
 
+/// Most zeros a label on an axis writes out.
+const MAX_ZEROS: i32 = 6;
+
 /// A step of `mantissa · 10^exponent` plane units, with mantissa 1, 2 or 5:
 /// steps whose multiples read as short decimals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,15 +51,26 @@ impl Step {
 
     /// The numbers of the lines at multiples of `step` (plane units) that
     /// fall within `[min, max]`.
+    /// None past where an f64 tells neighbouring multiples apart, which the
+    /// zoom reaches first far from the origin.
     pub fn lines(step: f64, min: f64, max: f64) -> std::ops::RangeInclusive<i64> {
-        (min / step).ceil() as i64..=(max / step).floor() as i64
+        let (first, last) = ((min / step).ceil(), (max / step).floor());
+        if first.abs().max(last.abs()) >= (1u64 << 53) as f64 {
+            return 1..=0;
+        }
+        first as i64..=last as i64
     }
 
     /// The label of the line at `k` times this step on the real axis: as
     /// many decimals as the step needs, trailing zeros dropped (0.8, 1, 1.2).
+    /// Past `MAX_ZEROS` zeros, in scientific notation.
     pub fn real_label(self, k: i64) -> String {
         let digits = (k * self.mantissa).unsigned_abs().to_string();
-        let number = if self.exponent >= 0 {
+        let number = if k != 0 && self.exponent.abs() > MAX_ZEROS {
+            let significant = digits.trim_end_matches('0');
+            let exponent = self.exponent + (digits.len() - significant.len()) as i32;
+            with_minus_signs(&format!("{significant}e{exponent}"))
+        } else if self.exponent >= 0 {
             digits + &"0".repeat(self.exponent as usize)
         } else {
             let decimals = (-self.exponent) as usize;
@@ -113,8 +127,8 @@ mod tests {
 
     #[test]
     fn steps_stay_near_the_spacing_at_every_zoom() {
-        let mut ppu = 1e-9;
-        while ppu <= 1e6 {
+        let mut ppu = 1e-30;
+        while ppu <= 1e300 {
             let spacing = Step::near(120.0, ppu).value() * ppu;
             assert!((75.0..=192.0).contains(&spacing), "{ppu}: {spacing}");
             ppu *= 1.07;

@@ -6,6 +6,7 @@ use conformal_visualizer::borders::{self, Border};
 use conformal_visualizer::examples::EXAMPLES;
 use conformal_visualizer::expr::{self, Function, Homotopy, ParseError};
 use conformal_visualizer::scene::{Coloring, DEFAULT_PIXELS_PER_UNIT, DEFAULT_RESOLUTION, Scene};
+use conformal_visualizer::patch::Patch;
 use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph, readout};
 use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
@@ -26,10 +27,14 @@ const DOMAIN_LIMIT: f64 = 1e12;
 /// Fraction of an edge's size that dragging its field moves it per screen
 /// point, so it covers tiny and huge values alike.
 const EDGE_DRAG_SPEED: f64 = 0.005;
-/// Zoom limits, in screen points per unit: zoomed all the way out, the window
-/// spans about `DOMAIN_LIMIT`. Positions are f32, so panning loses about
-/// |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
-const SCALE_RANGE: std::ops::RangeInclusive<f64> = 1e-9..=1_000_000.0;
+/// Zoom limits, in screen points per unit, there only to keep the arithmetic
+/// finite: what the zoom runs into first is the precision of f64, about 1e15
+/// at |z| = 1 and much further near the origin. Zoomed out, the GPU's f32 sets
+/// the limit, as nothing there goes through a `Patch`.
+const SCALE_RANGE: std::ops::RangeInclusive<f64> = 1e-30..=1e300;
+/// Zoom, times the size of what is at the window centre, from which the grid is
+/// drawn from a `Patch`. There f32 is still good to a fraction of a pixel.
+const PATCH_ABOVE: f64 = 1e5;
 /// Exponent of the zoom per screen point of Ctrl + scroll or of dragging the
 /// zoom field. Its range spans too many decades for a slider's track.
 const ZOOM_PER_POINT: f64 = 0.005;
@@ -59,6 +64,8 @@ const PANEL_FADE_SECONDS: f32 = 0.1;
 const FINE: f32 = 0.2;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
 const MAX_DENSITY: f64 = 2048.0;
+/// Newton steps to follow a patch's grid point from one frame to the next.
+const PATCH_NEWTON_STEPS: usize = 8;
 /// Upper bound on segments drawn per frame; large grids get coarser sampling.
 const MAX_SEGMENTS: u32 = 1_000_000;
 /// In screen points.
@@ -192,6 +199,14 @@ struct GridParams {
     domain_min: Vec2,
     domain_max: Vec2,
     half_view: Vec2,
+    patched: u32,
+    units_per_u: f32,
+    patch_source: Vec2,
+    lines_from: Vec2,
+    cubic0: Vec2,
+    cubic1: Vec2,
+    cubic2: Vec2,
+    cubic3: Vec2,
 }
 
 /// The page URL, which carries the scene (see `conformal_visualizer::scene`).
@@ -370,6 +385,9 @@ struct Model {
     /// A slider or other dragged value in the control window was held at the
     /// last update.
     slider_held: bool,
+    /// The grid point of the last `Patch`. The next one is usually right next
+    /// to it, which spares the search through the whole grid.
+    patch_seed: Option<Complex<f64>>,
 }
 
 impl Model {
@@ -455,6 +473,59 @@ impl Model {
 
     fn grid(&self) -> [f64; 4] {
         [self.x_min, self.x_max, self.y_min, self.y_max]
+    }
+
+    /// The cubic that stands in for the map in the shader, when zoomed in far
+    /// enough that the map itself would be off by pixels and bends so little
+    /// across the window that a cubic will do. With several points landing at
+    /// the window centre (z² has two), it follows one of them.
+    fn patch(&self) -> Option<Patch> {
+        let ppu = self.pixels_per_unit;
+        let position = Complex::new(self.position.x, self.position.y);
+        let centre = -position;
+        if ppu * centre.norm().max(1.0) < PATCH_ABOVE {
+            return None;
+        }
+        let source = self.point_at(centre)?;
+        let (p, t) = (self.parameter, self.homotopy);
+        let jet = if self.peek {
+            Function::identity().jet(source, p)
+        } else {
+            self.ends.jet(source, p, t)
+        };
+        let reach = self.half_view.length() as f64;
+        Patch::new(source, jet, position, ppu, reach, &self.full_layout(), MAX_SEGMENTS)
+    }
+
+    /// A grid point that lands on `w`: one next to the last patch's if there
+    /// is one, otherwise the first found. It may lie just outside the grid,
+    /// with the grid's edge in view.
+    fn point_at(&self, w: Complex<f64>) -> Option<Complex<f64>> {
+        if self.unmapped() {
+            return Some(w);
+        }
+        let tolerance = (0.25 / self.pixels_per_unit).max(8.0 * f64::EPSILON * w.norm().max(1.0));
+        let newton = |mut z: Complex<f64>| {
+            for _ in 0..PATCH_NEWTON_STEPS {
+                let miss = self.map(z) - w;
+                if miss.norm() <= tolerance {
+                    return Some(z);
+                }
+                z -= miss / self.map_derivative(z);
+                if !(z.re.is_finite() && z.im.is_finite()) {
+                    return None;
+                }
+            }
+            None
+        };
+        self.patch_seed.and_then(newton).or_else(|| {
+            let (min, max) = self.domain();
+            let slack = 0.25 * (max - min);
+            let map = |z| self.map(z);
+            let derivative = |z| self.map_derivative(z);
+            let (found, _) = readout::preimages(map, derivative, (min - slack, max + slack), w, tolerance, 1);
+            found.first().copied()
+        })
     }
 
     /// The grid border drawn nearest the screen point `cursor`, and the grid
@@ -782,6 +853,7 @@ fn new_model(window: Entity, fragment: String) -> Model {
         panel: egui::Rect::NOTHING,
         panel_open: None,
         slider_held: false,
+        patch_seed: None,
     };
     model.set_scene(Scene::from_fragment(&fragment));
     model
@@ -948,6 +1020,9 @@ fn update(app: &App, model: &mut Model) {
         _ => None,
     };
     animate(app, model, steer != 0.0, wake_at);
+    if let Some(patch) = model.patch() {
+        model.patch_seed = Some(patch.source);
+    }
     if math_fonts {
         axis_labels(&ctx, model);
         if let Hover::Shown(cursor) = hover {
@@ -1282,7 +1357,8 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
                 egui::DragValue::new(&mut model.pixels_per_unit)
                     .speed(speed)
                     .range(SCALE_RANGE)
-                    .prefix("Zoom "),
+                    .prefix("Zoom ")
+                    .custom_formatter(|zoom, _| zoom_text(zoom)),
             );
             model.slider_held |= zoom.dragged();
         }
@@ -1644,7 +1720,8 @@ fn view(app: &App, model: &Model) {
     draw.background().srgb(0.02, 0.02, 0.02);
     plane_grid(&draw, model);
 
-    let layout = model.grid_layout();
+    let patch = model.patch();
+    let layout = patch.map_or_else(|| model.grid_layout(), |patch| patch.layout);
     let domain = model.full_layout();
     let segments = layout.segment_count();
     if segments == 0 {
@@ -1668,6 +1745,14 @@ fn view(app: &App, model: &Model) {
         domain_min: gpu(domain.min),
         domain_max: gpu(domain.max),
         half_view: model.half_view,
+        patched: patch.is_some() as u32,
+        units_per_u: patch.map_or(0.0, |patch| patch.units_per_u as f32),
+        patch_source: patch.map_or(Vec2::ZERO, |patch| gpu(patch.source)),
+        lines_from: patch.map_or(gpu(layout.min), |patch| gpu(patch.lines_from)),
+        cubic0: patch.map_or(Vec2::ZERO, |patch| gpu(patch.cubic[0])),
+        cubic1: patch.map_or(Vec2::ZERO, |patch| gpu(patch.cubic[1])),
+        cubic2: patch.map_or(Vec2::ZERO, |patch| gpu(patch.cubic[2])),
+        cubic3: patch.map_or(Vec2::ZERO, |patch| gpu(patch.cubic[3])),
     };
     // One quad, drawn once per segment; the shader places its corners.
     let grid = draw.shader_model(GridShader { params });
@@ -1971,6 +2056,15 @@ fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
         });
 }
 
+/// The zoom for its field, which spans too many decades for plain digits.
+fn zoom_text(zoom: f64) -> String {
+    if (0.01..1e6).contains(&zoom) {
+        format!("{zoom:.2}")
+    } else {
+        format!("{zoom:.3e}")
+    }
+}
+
 /// A field for a grid edge. The edges have no useful bounds, so a slider has
 /// no track to offer: this drags at a speed that follows the value, which
 /// reaches any size quickly and stays fine near zero, and takes typed values.
@@ -2194,6 +2288,86 @@ mod tests {
         let model = opened("ex=joukowski&color=stretch&t=0.5");
         assert_eq!((model.stage, model.homotopy), (0, 0.5));
         assert!(model.ends.start.is_identity());
+    }
+
+    /// What the patch draws at `offset` screen points from the window centre,
+    /// and where the map itself puts that grid point, in f64.
+    fn patch_and_map(model: &Model, offset: Complex<f64>) -> (Complex<f64>, Complex<f64>) {
+        let patch = model.patch().expect("a patch");
+        let u = offset / patch.cubic[1];
+        let [a0, a1, a2, a3] = patch.cubic;
+        let drawn = a0 + u * (a1 + u * (a2 + u * a3));
+        let z = patch.source + u * patch.units_per_u;
+        let position = Complex::new(model.position.x, model.position.y);
+        (drawn, (model.map(z) + position) * model.pixels_per_unit)
+    }
+
+    #[test]
+    fn far_zoomed_in_the_grid_comes_from_a_patch() {
+        let mut model = composition();
+        // Aim the window at where the point lands.
+        let w = model.map(Complex::new(0.3, 0.7));
+        model.position = dvec2(-w.re, -w.im);
+        model.pixels_per_unit = 1e3;
+        assert_eq!(model.patch(), None);
+        model.pixels_per_unit = 1e10;
+        for offset in [Complex::new(0.0, 0.0), Complex::new(300.0, -200.0)] {
+            let (drawn, exact) = patch_and_map(&model, offset);
+            assert!((drawn - exact).norm() < 0.5, "{drawn} vs {exact}");
+        }
+    }
+
+    #[test]
+    fn a_patch_follows_its_point_from_one_view_to_the_next() {
+        let mut model = composition();
+        let w = model.map(Complex::new(0.3, 0.7));
+        model.position = dvec2(-w.re, -w.im);
+        model.pixels_per_unit = 1e10;
+        model.patch_seed = model.patch().map(|patch| patch.source);
+        let before = model.patch_seed.unwrap();
+        model.position += dvec2(3e-8, -2e-8);
+        let after = model.patch().unwrap().source;
+        assert!((after - before).norm() < 1e-6, "{before} to {after}");
+    }
+
+    #[test]
+    fn the_unmapped_grid_is_patched_at_any_depth() {
+        let mut model = opened("f=z&t=1");
+        model.position = dvec2(-1.0, -1.0);
+        model.pixels_per_unit = 1e13;
+        let patch = model.patch().unwrap();
+        assert_eq!(patch.source, Complex::new(1.0, 1.0));
+        assert_eq!(patch.layout.h_lines + patch.layout.v_lines, 2);
+        // Near the origin the numbers stay good far past any f32.
+        model.position = dvec2(1e-200, 0.0);
+        model.pixels_per_unit = 1e205;
+        assert!(model.patch().is_some());
+    }
+
+    #[test]
+    fn peeking_draws_the_source_grid_from_a_patch_too() {
+        let mut model = composition();
+        model.position = dvec2(-0.3, -0.7);
+        model.pixels_per_unit = 1e10;
+        model.peek = true;
+        let patch = model.patch().unwrap();
+        assert_eq!(patch.source, Complex::new(0.3, 0.7));
+        assert!((patch.cubic[1] - 1.0).norm() < 1e-12);
+    }
+
+    #[test]
+    fn a_critical_point_keeps_the_plain_grid() {
+        let mut model = opened("f=z^2&t=1");
+        model.position = DVec2::ZERO;
+        model.pixels_per_unit = 1e10;
+        assert_eq!(model.patch(), None);
+    }
+
+    #[test]
+    fn the_zoom_reads_short_at_any_size() {
+        assert_eq!(zoom_text(150.0), "150.00");
+        assert_eq!(zoom_text(1.5e9), "1.500e9");
+        assert_eq!(zoom_text(2e-9), "2.000e-9");
     }
 
     #[test]

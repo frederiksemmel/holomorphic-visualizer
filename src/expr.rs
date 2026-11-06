@@ -125,6 +125,11 @@ impl Function {
         self.0.to_wgsl()
     }
 
+    /// f(z) = z.
+    pub fn identity() -> Function {
+        Function(Expr::Z)
+    }
+
     /// f(z, p), computed the way the grid shader computes it.
     pub fn eval(&self, z: Complex<f64>, p: Complex<f64>) -> Complex<f64> {
         self.0.eval(z, p)
@@ -140,6 +145,81 @@ impl Function {
         let h = 1e-3 * z.norm().max(1.0);
         (self.eval(z + h, p) - self.eval(z - h, p)) / (2.0 * h)
     }
+
+    /// The Taylor series of f around z. Exact, unlike [`Function::derivative`],
+    /// which matters far zoomed in, where a pixel is a tiny step (see
+    /// `crate::patch`).
+    pub fn jet(&self, z: Complex<f64>, p: Complex<f64>) -> Jet {
+        self.0.jet(z, p)
+    }
+}
+
+/// The first terms of a Taylor series: a0 + a1·δ + a2·δ² + a3·δ³.
+pub type Jet = [Complex<f64>; 4];
+
+/// Multiplies series, dropping what is past the cubic.
+fn jet_mul(a: Jet, b: Jet) -> Jet {
+    std::array::from_fn(|k| (0..=k).map(|i| a[i] * b[k - i]).sum())
+}
+
+fn jet_div(a: Jet, b: Jet) -> Jet {
+    let mut c = [Complex::new(0.0, 0.0); 4];
+    for k in 0..4 {
+        let known: Complex<f64> = (0..k).map(|i| c[i] * b[k - i]).sum();
+        c[k] = cdiv(a[k] - known, b[0]);
+    }
+    c
+}
+
+/// The series of (g, h) where g' = u'·h and h' = sign·u'·g, as sin and cos, or
+/// sinh and cosh, are, from their values at the centre.
+fn jet_pair(u: Jet, g0: Complex<f64>, h0: Complex<f64>, sign: f64) -> (Jet, Jet) {
+    let (mut g, mut h) = ([g0; 4], [h0; 4]);
+    for k in 1..4 {
+        let term = |x: &Jet| -> Complex<f64> {
+            (1..=k).map(|i| u[i] * x[k - i] * i as f64).sum::<Complex<f64>>() / k as f64
+        };
+        (g[k], h[k]) = (term(&h), term(&g) * sign);
+    }
+    (g, h)
+}
+
+fn jet_exp(u: Jet) -> Jet {
+    jet_pair(u, cexp(u[0]), cexp(u[0]), 1.0).0
+}
+
+fn jet_log(u: Jet) -> Jet {
+    let mut l = [clog(u[0]); 4];
+    for k in 1..4 {
+        let known: Complex<f64> =
+            (1..k).map(|i| l[i] * u[k - i] * i as f64).sum::<Complex<f64>>() / k as f64;
+        l[k] = cdiv(u[k] - known, u[0]);
+    }
+    l
+}
+
+fn jet_sqrt(u: Jet) -> Jet {
+    let mut s = [csqrt(u[0]); 4];
+    for k in 1..4 {
+        let known: Complex<f64> = (1..k).map(|i| s[i] * s[k - i]).sum();
+        s[k] = cdiv(u[k] - known, 2.0 * s[0]);
+    }
+    s
+}
+
+/// As `cpowi`: repeated squaring, so no branch cut.
+fn jet_powi(u: Jet, n: i32) -> Jet {
+    let zero = Complex::new(0.0, 0.0);
+    let one = [Complex::new(1.0, 0.0), zero, zero, zero];
+    let (mut result, mut base, mut k) = (one, u, n.unsigned_abs());
+    while k > 0 {
+        if k & 1 == 1 {
+            result = jet_mul(result, base);
+        }
+        base = jet_mul(base, base);
+        k >>= 1;
+    }
+    if n < 0 { jet_div(one, result) } else { result }
 }
 
 /// Renders the formula back to text the parser reads as the same tree, with
@@ -209,6 +289,12 @@ impl Homotopy {
         } else {
             start + t * (self.end.derivative(z, p) - start)
         }
+    }
+
+    /// The Taylor series of [`Homotopy::map`] around `z`.
+    pub fn jet(&self, z: Complex<f64>, p: Complex<f64>, t: f64) -> Jet {
+        let (start, end) = (self.start.jet(z, p), self.end.jet(z, p));
+        std::array::from_fn(|k| start[k] + t * (end[k] - start[k]))
     }
 
     /// The WGSL definitions `src/grid.wgsl` needs: `f` for the end, `f_start`
@@ -430,6 +516,53 @@ impl Expr {
                 None => format!("cpow({}, {})", a.to_wgsl(), b.to_wgsl()),
             },
             Expr::Call(function, a) => format!("{function}({})", a.to_wgsl()),
+        }
+    }
+
+    /// The Taylor series of `eval` around z, with the same branch cuts.
+    fn jet(&self, z: Complex<f64>, p: Complex<f64>) -> Jet {
+        let zero = Complex::new(0.0, 0.0);
+        let constant = |a: Complex<f64>| [a, zero, zero, zero];
+        let each = |a: Jet, b: Jet, join: fn(Complex<f64>, Complex<f64>) -> Complex<f64>| {
+            std::array::from_fn(|k| join(a[k], b[k]))
+        };
+        match self {
+            Expr::Number(n) => constant(Complex::new(*n, 0.0)),
+            Expr::Z => [z, Complex::new(1.0, 0.0), zero, zero],
+            Expr::P => constant(p),
+            Expr::I => constant(Complex::i()),
+            Expr::Neg(a) => a.jet(z, p).map(|x| -x),
+            Expr::Add(a, b) => each(a.jet(z, p), b.jet(z, p), |x, y| x + y),
+            Expr::Sub(a, b) => each(a.jet(z, p), b.jet(z, p), |x, y| x - y),
+            Expr::Mul(a, b) => jet_mul(a.jet(z, p), b.jet(z, p)),
+            Expr::Div(a, b) => jet_div(a.jet(z, p), b.jet(z, p)),
+            Expr::Pow(a, b) => match b.integer() {
+                Some(n) => jet_powi(a.jet(z, p), n),
+                None => jet_exp(jet_mul(b.jet(z, p), jet_log(a.jet(z, p)))),
+            },
+            Expr::Call(function, a) => {
+                let a = a.jet(z, p);
+                let sin_cos = || jet_pair(a, csin(a[0]), ccos(a[0]), -1.0);
+                let sinh_cosh = || jet_pair(a, csinh(a[0]), ccosh(a[0]), 1.0);
+                match *function {
+                    "cexp" => jet_exp(a),
+                    "clog" => jet_log(a),
+                    "csqrt" => jet_sqrt(a),
+                    "csin" => sin_cos().0,
+                    "ccos" => sin_cos().1,
+                    "ctan" => {
+                        let (sin, cos) = sin_cos();
+                        jet_div(sin, cos)
+                    }
+                    "csinh" => sinh_cosh().0,
+                    "ccosh" => sinh_cosh().1,
+                    "ctanh" => {
+                        let (sinh, cosh) = sinh_cosh();
+                        jet_div(sinh, cosh)
+                    }
+                    _ => unreachable!("{function} is not in FUNCTIONS"),
+                }
+            }
         }
     }
 
@@ -1087,6 +1220,40 @@ mod tests {
             for z in points {
                 assert_close(function.eval(z, p), expected(z, p), &format!("{formula} at {z}"));
             }
+        }
+    }
+
+    /// Each term of the series against a central difference of the one
+    /// before, for every function and away from its branch cuts.
+    #[test]
+    fn jets_are_the_taylor_series() {
+        let (z, p) = (Complex::new(0.7, 0.4), Complex::new(0.5, 0.25));
+        let formulas = [
+            "z", "p", "2", "-z", "z + p", "z - 1/z", "p*z*z", "z/(1 + z)", "z^2", "z^5", "z^-3",
+            "z^p", "2^z", "z^z", "exp(z)", "log(z)", "ln(p*z)", "sqrt(z)", "sin(z)", "cos(z)",
+            "tan(z)", "sinh(z)", "cosh(z)", "tanh(z)", "sin(cos(p*z))", "exp(z + 1/z)",
+        ];
+        let h = 1e-3;
+        for formula in formulas {
+            let f = parse(formula).unwrap();
+            let jet = f.jet(z, p);
+            assert_close(jet[0], f.eval(z, p), formula);
+            for k in 1..4 {
+                let at = |z| f.jet(z, p)[k - 1];
+                let slope = (at(z + h) - at(z - h)) / (2.0 * h) / k as f64;
+                assert!((jet[k] - slope).norm() < 1e-4 * slope.norm().max(1.0), "{formula}, a{k}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_jet_keeps_the_branch_of_eval() {
+        // Below the cut, log(z) has argument −π, and sqrt(z) is near −i.
+        let z = Complex::new(-1.0, -1e-6);
+        let p = Complex::new(1.0, 0.0);
+        for formula in ["log(z)", "sqrt(z)", "z^p"] {
+            let f = parse(formula).unwrap();
+            assert_close(f.jet(z, p)[0], f.eval(z, p), formula);
         }
     }
 

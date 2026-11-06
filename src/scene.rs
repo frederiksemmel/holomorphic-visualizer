@@ -197,14 +197,18 @@ impl Scene {
 
     /// Position and zoom, precise to a fraction of a screen point.
     fn view(&self) -> String {
-        let decimals = (self.pixels_per_unit.max(1.0).log10().ceil() as usize + 1).clamp(2, 7);
-        // Far zoomed out it takes a few digits past the leading zeros.
-        let zoom_decimals = (2.0 - self.pixels_per_unit.log10().ceil()).max(1.0) as usize;
+        let decimals = (self.pixels_per_unit.max(1.0).log10().ceil() as usize + 1).max(2);
+        // Far from 1 it takes every digit, in a form that keeps them short.
+        let zoom = if (0.01..1e6).contains(&self.pixels_per_unit) {
+            let decimals = (2.0 - self.pixels_per_unit.log10().ceil()).max(1.0) as usize;
+            number(self.pixels_per_unit, decimals)
+        } else {
+            format!("{:e}", self.pixels_per_unit)
+        };
         format!(
-            "{},{},{}",
+            "{},{},{zoom}",
             number(self.position[0], decimals),
             number(self.position[1], decimals),
-            number(self.pixels_per_unit, zoom_decimals)
         )
     }
 }
@@ -324,8 +328,24 @@ mod tests {
     }
 
     #[test]
+    fn a_view_zoomed_far_in_round_trips() {
+        for (pixels_per_unit, x) in [(1e7, 0.30000012), (1e12, 0.300000000012), (1e200, 1e-195)] {
+            let scene = Scene {
+                pixels_per_unit,
+                position: [x, -x],
+                ..Scene::example(0)
+            };
+            let decoded = Scene::from_fragment(&scene.to_fragment());
+            assert_eq!(decoded.pixels_per_unit, pixels_per_unit);
+            // Off by less than a tenth of a point.
+            let miss = (decoded.position[0] - x).abs() * pixels_per_unit;
+            assert!(miss < 0.1, "{pixels_per_unit}: {miss}");
+        }
+    }
+
+    #[test]
     fn a_view_zoomed_far_out_round_trips() {
-        for pixels_per_unit in [0.5, 1e-3, 1e-9] {
+        for pixels_per_unit in [0.5, 1e-3, 1e-9, 1e-30] {
             let scene = Scene {
                 pixels_per_unit,
                 ..Scene::example(0)
