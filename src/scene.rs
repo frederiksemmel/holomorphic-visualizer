@@ -9,9 +9,9 @@ use crate::examples::EXAMPLES;
 use num::Complex;
 
 /// Screen points per unit length in a fresh view.
-pub const DEFAULT_PIXELS_PER_UNIT: f32 = 150.0;
+pub const DEFAULT_PIXELS_PER_UNIT: f64 = 150.0;
 /// Grid density of a fresh view: `2^resolution` lines per unit.
-pub const DEFAULT_RESOLUTION: f32 = 2.0;
+pub const DEFAULT_RESOLUTION: f64 = 2.0;
 
 /// How grid lines are colored. The discriminants are the `COLORING_*`
 /// constants in `src/grid.wgsl`.
@@ -65,14 +65,14 @@ pub struct Scene {
     /// Index into `EXAMPLES`: the one the rest starts from.
     pub example: usize,
     pub formula: String,
-    pub parameter: Complex<f32>,
+    pub parameter: Complex<f64>,
     /// x min, x max, y min, y max.
-    pub grid: [f32; 4],
-    pub resolution: f32,
+    pub grid: [f64; 4],
+    pub resolution: f64,
     pub coloring: Coloring,
     /// Offset of the complex plane, in plane units.
-    pub position: [f32; 2],
-    pub pixels_per_unit: f32,
+    pub position: [f64; 2],
+    pub pixels_per_unit: f64,
     /// Which stage of the formula shows (see `expr::Function::stages`), or 0
     /// for all of it. Only the formula knows how many there are, so a link
     /// can ask for one that doesn't exist; the app shows all of it then.
@@ -80,7 +80,7 @@ pub struct Scene {
     /// Blend along the homotopy from its start (0) to its end (1): the
     /// identity to `f`, or the stage before to this one. `None` while the
     /// animation plays.
-    pub homotopy: Option<f32>,
+    pub homotopy: Option<f64>,
 }
 
 impl Scene {
@@ -210,7 +210,7 @@ impl Scene {
 }
 
 /// `x` with up to `decimals` decimals, without trailing zeros.
-fn number(x: f32, decimals: usize) -> String {
+fn number(x: f64, decimals: usize) -> String {
     let fixed = format!("{x:.decimals$}");
     let trimmed = if fixed.contains('.') {
         fixed.trim_end_matches('0').trim_end_matches('.')
@@ -223,20 +223,20 @@ fn number(x: f32, decimals: usize) -> String {
     }
 }
 
-fn complex(z: Complex<f32>) -> String {
+fn complex(z: Complex<f64>) -> String {
     list(&[z.re, z.im], 4)
 }
 
-fn list(values: &[f32], decimals: usize) -> String {
+fn list(values: &[f64], decimals: usize) -> String {
     let numbers: Vec<String> = values.iter().map(|&x| number(x, decimals)).collect();
     numbers.join(",")
 }
 
 /// Exactly `N` finite numbers separated by commas.
-fn numbers<const N: usize>(text: &str) -> Option<[f32; N]> {
-    let values: Vec<f32> = text
+fn numbers<const N: usize>(text: &str) -> Option<[f64; N]> {
+    let values: Vec<f64> = text
         .split(',')
-        .map(|s| s.trim().parse::<f32>().ok().filter(|x| x.is_finite()))
+        .map(|s| s.trim().parse::<f64>().ok().filter(|x| x.is_finite()))
         .collect::<Option<_>>()?;
     values.try_into().ok()
 }

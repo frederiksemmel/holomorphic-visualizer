@@ -3,21 +3,21 @@
 //! user takes over. That is the identity to `f`, or when only one stage of
 //! `f` shows, the stage before to that one.
 
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 
 /// Seconds the source grid shows before it starts to bend.
-const HOLD_SOURCE: f32 = 0.75;
+const HOLD_SOURCE: f64 = 0.75;
 /// Seconds to bend from the start of the homotopy to its end, and the same back.
-const BEND: f32 = 3.0;
+const BEND: f64 = 3.0;
 /// Seconds the image of the grid shows before it bends back.
-const HOLD_IMAGE: f32 = 2.0;
+const HOLD_IMAGE: f64 = 2.0;
 /// One loop: hold, bend, hold, bend back, hold.
-pub const PERIOD: f32 = 2.0 * (HOLD_SOURCE + BEND) + HOLD_IMAGE;
+pub const PERIOD: f64 = 2.0 * (HOLD_SOURCE + BEND) + HOLD_IMAGE;
 
 /// The homotopy blend `time` seconds into the animation.
-pub fn blend(time: f32) -> f32 {
+pub fn blend(time: f64) -> f64 {
     let t = time.rem_euclid(PERIOD);
-    let ease = |s: f32| (1.0 - (PI * s.clamp(0.0, 1.0)).cos()) / 2.0;
+    let ease = |s: f64| (1.0 - (PI * s.clamp(0.0, 1.0)).cos()) / 2.0;
     if t < PERIOD / 2.0 {
         ease((t - HOLD_SOURCE) / BEND)
     } else {
@@ -28,7 +28,7 @@ pub fn blend(time: f32) -> f32 {
 /// A time at which [`blend`] is `homotopy`, on the way to `f`, so the
 /// animation can pick up from wherever the user left the homotopy. For 0
 /// that is the start, so the source grid shows for a moment first.
-pub fn time_at(homotopy: f32) -> f32 {
+pub fn time_at(homotopy: f64) -> f64 {
     if homotopy <= 0.0 {
         return 0.0;
     }
@@ -50,9 +50,9 @@ mod tests {
     #[test]
     fn is_continuous() {
         let steps = 10_000;
-        let dt = PERIOD * 2.0 / steps as f32;
+        let dt = PERIOD * 2.0 / steps as f64;
         for k in 0..steps {
-            let t = k as f32 * dt;
+            let t = k as f64 * dt;
             assert!((blend(t + dt) - blend(t)).abs() < 0.01, "jump at {t}");
         }
     }

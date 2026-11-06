@@ -9,6 +9,7 @@ use conformal_visualizer::scene::{Coloring, DEFAULT_PIXELS_PER_UNIT, DEFAULT_RES
 use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph, readout};
 use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
+use bevy::math::{DVec2, dvec2};
 use num::Complex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,24 +18,24 @@ use std::time::Duration;
 const POINTS_PER_LINE: f32 = 24.0;
 /// Finest grid the controls offer; below the library's hard cap
 /// (`conformal_visualizer::MAX_RESOLUTION`) to keep the line count sane.
-const MAX_UI_RESOLUTION: f32 = 6.0;
+const MAX_UI_RESOLUTION: f64 = 6.0;
 /// The grid edges stay within `[-DOMAIN_LIMIT, DOMAIN_LIMIT]`. Not a limit
 /// anyone should meet: it only keeps the arithmetic finite, and f32 has long
 /// stopped telling neighbouring grid lines apart out here.
-const DOMAIN_LIMIT: f32 = 1e12;
+const DOMAIN_LIMIT: f64 = 1e12;
 /// Fraction of an edge's size that dragging its field moves it per screen
 /// point, so it covers tiny and huge values alike.
 const EDGE_DRAG_SPEED: f64 = 0.005;
 /// Zoom limits, in screen points per unit: zoomed all the way out, the window
 /// spans about `DOMAIN_LIMIT`. Positions are f32, so panning loses about
 /// |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
-const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1e-9..=1_000_000.0;
+const SCALE_RANGE: std::ops::RangeInclusive<f64> = 1e-9..=1_000_000.0;
 /// Exponent of the zoom per screen point of Ctrl + scroll or of dragging the
 /// zoom field. Its range spans too many decades for a slider's track.
-const ZOOM_PER_POINT: f32 = 0.005;
+const ZOOM_PER_POINT: f64 = 0.005;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range
 /// at the default zoom (see [`Model::homotopy_travel`]).
-const HOMOTOPY_TRAVEL: f32 = 300.0;
+const HOMOTOPY_TRAVEL: f64 = 300.0;
 /// Seconds that holding ← or → takes across the whole homotopy range at the
 /// default zoom.
 const ARROW_SECONDS: f32 = 2.0;
@@ -45,10 +46,10 @@ const MAX_KEY_STEP: f32 = 1.0 / 30.0;
 const RESOLUTION_TRAVEL: f32 = 50.0;
 /// Shift + scroll moves a grid border by one grid square per this many
 /// screen points: a square's size on screen at the default zoom and resolution.
-const SCROLL_PER_SQUARE: f32 = DEFAULT_PIXELS_PER_UNIT / (1 << DEFAULT_RESOLUTION as u32) as f32;
+const SCROLL_PER_SQUARE: f64 = DEFAULT_PIXELS_PER_UNIT / (1 << DEFAULT_RESOLUTION as u32) as f64;
 /// At most this many squares per scroll event, so a flick doesn't throw the
 /// border across the plane.
-const MAX_SCROLL_SQUARES: f32 = 4.0;
+const MAX_SCROLL_SQUARES: f64 = 4.0;
 /// The control window fades to this while one of its sliders is dragged, to
 /// show the result underneath: on a phone it covers most of the canvas.
 const HELD_PANEL_OPACITY: f32 = 0.2;
@@ -57,7 +58,7 @@ const PANEL_FADE_SECONDS: f32 = 0.1;
 /// Shift slows dragging p (on its pad or with the right button) to this.
 const FINE: f32 = 0.2;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
-const MAX_DENSITY: f32 = 2048.0;
+const MAX_DENSITY: f64 = 2048.0;
 /// Upper bound on segments drawn per frame; large grids get coarser sampling.
 const MAX_SEGMENTS: u32 = 1_000_000;
 /// In screen points.
@@ -68,11 +69,11 @@ const STRETCH_OCTAVES: f32 = 2.0;
 /// Seconds to keep redrawing after the grid shader changes. Bevy doesn't draw
 /// the grid while it recompiles, and a tap on a stage is one input: with
 /// nothing moving, the app would sleep before the new shader is ready.
-const SHADER_SETTLE: f32 = 1.0;
+const SHADER_SETTLE: f64 = 1.0;
 /// Seconds between updates of the page URL. Browsers limit how often a page
 /// may rewrite its URL (Safari to 100 times in 30 s), and a slider drag
 /// changes the scene every frame.
-const LINK_INTERVAL: f32 = 0.4;
+const LINK_INTERVAL: f64 = 0.4;
 /// The background grid of the plane: major lines about this many screen
 /// points apart, at a step of 1, 2 or 5 times a power of ten.
 const MAJOR_SPACING: f64 = 120.0;
@@ -99,7 +100,7 @@ const WAKE_SLACK: Duration = Duration::from_millis(20);
 const READOUT_SOURCES: usize = 3;
 /// How close, in screen points, the image of a source point must come to
 /// the cursor.
-const READOUT_TOLERANCE: f32 = 0.25;
+const READOUT_TOLERANCE: f64 = 0.25;
 /// Text size of the readout card, in points.
 const READOUT_SIZE: f32 = 14.0;
 /// Its corner sits this many points from the cursor.
@@ -264,9 +265,9 @@ fn with_fragment(page: &str, fragment: &str) -> String {
 enum Morph {
     Off,
     /// Starts on the next update, from this homotopy.
-    Starting(f32),
+    Starting(f64),
     /// Playing; the app time at which the animation was at its start.
-    Since(f32),
+    Since(f64),
 }
 
 /// What a mouse drag on the canvas does, decided when the button goes down.
@@ -311,24 +312,24 @@ struct Model {
     /// WGSL for new `ends`, to be put in the grid shader on the next update.
     new_function: Option<String>,
     /// App time until which to keep redrawing (see [`SHADER_SETTLE`]).
-    settling_until: f32,
+    settling_until: f64,
     /// Screen points per unit length in the complex plane.
-    pixels_per_unit: f32,
+    pixels_per_unit: f64,
     /// Offset of the complex plane, in plane units.
-    position: Vec2,
+    position: DVec2,
     /// Grid density: `2^resolution` lines per unit.
-    resolution: f32,
-    x_min: f32,
-    x_max: f32,
-    y_min: f32,
-    y_max: f32,
-    parameter: Complex<f32>,
+    resolution: f64,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    parameter: Complex<f64>,
     /// Blend between the two `ends`: the start (0) and the end (1).
-    homotopy: f32,
+    homotopy: f64,
     morph: Morph,
     coloring: Coloring,
     /// The fragment last put in the page URL, and the app time it was put there.
-    link_written: (String, f32),
+    link_written: (String, f64),
     /// The fragment of the link "Copy link" last copied.
     link_copied: Option<String>,
     /// Redrawing every frame (animating, or a URL update is due) rather than on input.
@@ -347,7 +348,7 @@ struct Model {
     /// comes up. Found again on every scroll, the border would switch to
     /// another one as it moved away from the cursor, and the direction and
     /// speed of the scroll would change under the fingers.
-    scrolled_border: Option<(Border, Complex<f32>)>,
+    scrolled_border: Option<(Border, Complex<f64>)>,
     /// Shift was down at the last update.
     shift_held: bool,
     /// The "hold" button in the control window is pressed.
@@ -385,7 +386,7 @@ impl Model {
     fn grid_layout(&self) -> GridLayout {
         let (mut min, mut max) = self.domain();
         if self.unmapped() {
-            let half = self.half_view / self.pixels_per_unit;
+            let half = self.half_view.as_dvec2() / self.pixels_per_unit;
             let (view_min, view_max) = (-half - self.position, half - self.position);
             (min, max) = clip_to_view(
                 self.resolution,
@@ -398,14 +399,14 @@ impl Model {
         Self::layout(self.resolution, min, max)
     }
 
-    fn domain(&self) -> (Complex<f32>, Complex<f32>) {
+    fn domain(&self) -> (Complex<f64>, Complex<f64>) {
         (
             Complex::new(self.x_min, self.y_min),
             Complex::new(self.x_max, self.y_max),
         )
     }
 
-    fn layout(resolution: f32, min: Complex<f32>, max: Complex<f32>) -> GridLayout {
+    fn layout(resolution: f64, min: Complex<f64>, max: Complex<f64>) -> GridLayout {
         GridLayout::new(
             resolution,
             min.re,
@@ -418,7 +419,7 @@ impl Model {
     }
 
     /// How far to blend from the start of the homotopy towards its end.
-    fn blend(&self) -> f32 {
+    fn blend(&self) -> f64 {
         if self.peek { 0.0 } else { self.homotopy }
     }
 
@@ -430,7 +431,7 @@ impl Model {
 
     /// Where the grid point `z` is drawn in the plane, as `g` in
     /// `src/grid.wgsl` computes it.
-    fn map(&self, z: Complex<f32>) -> Complex<f32> {
+    fn map(&self, z: Complex<f64>) -> Complex<f64> {
         if self.peek {
             z
         } else {
@@ -439,7 +440,7 @@ impl Model {
     }
 
     /// The derivative of [`Model::map`].
-    fn map_derivative(&self, z: Complex<f32>) -> Complex<f32> {
+    fn map_derivative(&self, z: Complex<f64>) -> Complex<f64> {
         if self.peek {
             Complex::new(1.0, 0.0)
         } else {
@@ -448,23 +449,23 @@ impl Model {
     }
 
     /// Where the grid point `z` is drawn on screen, in points.
-    fn grid_to_screen(&self, z: Complex<f32>) -> Complex<f32> {
-        (self.map(z) + complex(self.position)) * self.pixels_per_unit
+    fn grid_to_screen(&self, z: Complex<f64>) -> Complex<f64> {
+        (self.map(z) + Complex::new(self.position.x, self.position.y)) * self.pixels_per_unit
     }
 
-    fn grid(&self) -> [f32; 4] {
+    fn grid(&self) -> [f64; 4] {
         [self.x_min, self.x_max, self.y_min, self.y_max]
     }
 
     /// The grid border drawn nearest the screen point `cursor`, and the grid
     /// point on it that lands there.
-    fn nearest_border(&self, cursor: Vec2) -> Option<(Border, Complex<f32>)> {
+    fn nearest_border(&self, cursor: Vec2) -> Option<(Border, Complex<f64>)> {
         borders::nearest_border(self.grid(), &|z| self.grid_to_screen(z), complex(cursor))
     }
 
     /// Moves `border` by `step` grid units. Like `move_edges`, it may pass
     /// the opposite border, which empties the grid until it comes back.
-    fn move_border(&mut self, border: Border, step: f32) {
+    fn move_border(&mut self, border: Border, step: f64) {
         let edge = match border {
             Border::XMin => &mut self.x_min,
             Border::XMax => &mut self.x_max,
@@ -476,7 +477,7 @@ impl Model {
 
     /// The border drawn nearest `cursor`, and the map's derivative where it
     /// passes the cursor, for Shift + scroll to hold on to.
-    fn grab_for_scroll(&self, cursor: Vec2) -> Option<(Border, Complex<f32>)> {
+    fn grab_for_scroll(&self, cursor: Vec2) -> Option<(Border, Complex<f64>)> {
         let (border, z) = self.nearest_border(cursor)?;
         Some((border, self.map_derivative(z)))
     }
@@ -514,7 +515,7 @@ impl Model {
     /// Slides the source grid by `delta` screen points: the square itself,
     /// whatever the map then does to it.
     fn move_grid(&mut self, delta: Vec2) {
-        let step = delta * self.edge_units_per_point();
+        let step = delta.as_dvec2() * self.edge_units_per_point();
         self.move_border(Border::XMin, step.x);
         self.move_border(Border::XMax, step.x);
         self.move_border(Border::YMin, step.y);
@@ -525,14 +526,14 @@ impl Model {
     /// [`Model::homotopy_travel`]), stopping the animation.
     fn scrub(&mut self, amount: f32) {
         self.morph = Morph::Off;
-        self.homotopy = (self.homotopy + amount / self.homotopy_travel()).clamp(0.0, 1.0);
+        self.homotopy = (self.homotopy + amount as f64 / self.homotopy_travel()).clamp(0.0, 1.0);
     }
 
     /// Makes the grid finer by `amount` screen points of drag or scroll
     /// (coarser, if negative).
     fn refine(&mut self, amount: f32) {
         self.resolution =
-            (self.resolution + amount / RESOLUTION_TRAVEL).clamp(0.0, MAX_UI_RESOLUTION);
+            (self.resolution + (amount / RESOLUTION_TRAVEL) as f64).clamp(0.0, MAX_UI_RESOLUTION);
     }
 
     /// Shows `EXAMPLES[index]` with its own grid and parameter, bending from
@@ -573,7 +574,7 @@ impl Model {
         self.parameter = scene.parameter;
         self.resolution = scene.resolution.clamp(0.0, MAX_UI_RESOLUTION);
         self.coloring = scene.coloring;
-        self.position = Vec2::from_array(scene.position);
+        self.position = DVec2::from_array(scene.position);
         self.pixels_per_unit = scene
             .pixels_per_unit
             .clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
@@ -653,11 +654,12 @@ impl Model {
 
     fn reset_view(&mut self) {
         self.pixels_per_unit = DEFAULT_PIXELS_PER_UNIT;
-        self.position = Vec2::ZERO;
+        self.position = DVec2::ZERO;
     }
 
     /// Zooms by `factor`, keeping the plane point under `anchor` (screen points) in place.
-    fn zoom(&mut self, factor: f32, anchor: Vec2) {
+    fn zoom(&mut self, factor: f64, anchor: Vec2) {
+        let anchor = anchor.as_dvec2();
         let under_anchor = anchor / self.pixels_per_unit - self.position;
         self.pixels_per_unit =
             (self.pixels_per_unit * factor).clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
@@ -668,7 +670,7 @@ impl Model {
     /// Unmapped, an edge follows the cursor. Mapped, the zoom says nothing
     /// about how far a source edge moves on screen (and far zoomed in, 1:1
     /// would barely move it), so edges move at the default zoom's rate.
-    fn edge_units_per_point(&self) -> f32 {
+    fn edge_units_per_point(&self) -> f64 {
         if self.unmapped() {
             1.0 / self.pixels_per_unit
         } else {
@@ -681,20 +683,19 @@ impl Model {
     /// the plane, so zoomed in by k it moves k times as far on screen: the
     /// travel grows with the zoom to keep that motion as fast as at the
     /// default zoom. Zoomed out it stays put, or a flick would jump from z to f.
-    fn homotopy_travel(&self) -> f32 {
+    fn homotopy_travel(&self) -> f64 {
         HOMOTOPY_TRAVEL * (self.pixels_per_unit / DEFAULT_PIXELS_PER_UNIT).max(1.0)
     }
 
     /// Moves p by `delta` screen points. p is not a point on screen, so this
     /// ignores the zoom.
     fn move_parameter(&mut self, delta: Vec2) {
-        let delta = delta / DEFAULT_PIXELS_PER_UNIT;
-        self.parameter += Complex::new(delta.x, delta.y);
+        self.parameter += complex(delta) / DEFAULT_PIXELS_PER_UNIT;
     }
 
     /// Moves each grid edge whose key is held (W/A/S/D: top, left, bottom,
     /// right) by `delta` grid units. Returns whether any edge key was held.
-    fn move_edges(&mut self, keys: &ButtonInput<KeyCode>, delta: Vec2) -> bool {
+    fn move_edges(&mut self, keys: &ButtonInput<KeyCode>, delta: DVec2) -> bool {
         let mut held = false;
         for (key, edge, step) in [
             (KeyCode::KeyA, &mut self.x_min, delta.x),
@@ -749,7 +750,7 @@ fn new_model(window: Entity, fragment: String) -> Model {
         new_function: None,
         settling_until: 0.0,
         pixels_per_unit: DEFAULT_PIXELS_PER_UNIT,
-        position: Vec2::ZERO,
+        position: DVec2::ZERO,
         resolution: DEFAULT_RESOLUTION,
         x_min,
         x_max,
@@ -760,7 +761,7 @@ fn new_model(window: Entity, fragment: String) -> Model {
         morph: Morph::Off,
         coloring: Coloring::default(),
         // Due at once, so the URL shows the link in its own words.
-        link_written: (fragment.clone(), f32::NEG_INFINITY),
+        link_written: (fragment.clone(), f64::NEG_INFINITY),
         link_copied: None,
         continuous: false,
         wake_at: None,
@@ -791,7 +792,7 @@ fn new_model(window: Entity, fragment: String) -> Model {
 /// Otherwise the app waits for input, or until `wake_at` if that comes first,
 /// when the hover readout is due.
 fn animate(app: &App, model: &mut Model, steering: bool, wake_at: Option<Instant>) {
-    let now = app.time();
+    let now = app.time() as f64;
     match model.morph {
         Morph::Off => {}
         Morph::Starting(homotopy) => {
@@ -890,7 +891,7 @@ fn update(app: &App, model: &mut Model) {
         ctx.request_repaint();
     }
     if let Some(functions) = model.new_function.take() {
-        model.settling_until = app.time() + SHADER_SETTLE;
+        model.settling_until = app.time() as f64 + SHADER_SETTLE;
         app.command_scope(|mut commands| {
             commands.queue(move |world: &mut World| set_grid_shader(world, &functions));
         });
@@ -930,7 +931,7 @@ fn update(app: &App, model: &mut Model) {
     }
     if steer != 0.0 {
         let dt = app.time_delta().min(MAX_KEY_STEP);
-        model.scrub(steer * dt * HOMOTOPY_TRAVEL / ARROW_SECONDS);
+        model.scrub(steer * dt * HOMOTOPY_TRAVEL as f32 / ARROW_SECONDS);
     }
 
     let mouse = app.mouse();
@@ -1075,7 +1076,7 @@ fn mouse_drag(
     }
     let delta = mouse - from;
     match drag {
-        Drag::Pan => model.position += delta / model.pixels_per_unit,
+        Drag::Pan => model.position += delta.as_dvec2() / model.pixels_per_unit,
         Drag::Parameter => model.move_parameter(delta * if modifiers.shift { FINE } else { 1.0 }),
         Drag::HeldBorder => model.drag_held_border(delta),
         Drag::Grid => model.move_grid(delta),
@@ -1095,7 +1096,7 @@ fn key_gesture(
     delta: Vec2,
     edge_delta: Vec2,
 ) -> bool {
-    let mut used = model.move_edges(keys, edge_delta * model.edge_units_per_point());
+    let mut used = model.move_edges(keys, edge_delta.as_dvec2() * model.edge_units_per_point());
     if keys.pressed(KeyCode::KeyP) {
         model.move_parameter(delta);
         used = true;
@@ -1515,14 +1516,14 @@ fn touch(app: &App, model: &mut Model, touch: TouchInput) {
             let egui_busy = ctx.egui_is_using_pointer();
             match model.touches.as_slice() {
                 _ if egui_busy => {}
-                [_] => model.position += (pos - previous) / model.pixels_per_unit,
+                [_] => model.position += (pos - previous).as_dvec2() / model.pixels_per_unit,
                 [a, b] => {
                     let other = if i == 0 { b.1 } else { a.1 };
                     // The midpoint between the fingers moves by half of this finger's motion.
-                    model.position += (pos - previous) / 2.0 / model.pixels_per_unit;
+                    model.position += (pos - previous).as_dvec2() / 2.0 / model.pixels_per_unit;
                     let before = previous.distance(other);
                     if before > 1.0 {
-                        model.zoom(pos.distance(other) / before, (pos + other) / 2.0);
+                        model.zoom((pos.distance(other) / before) as f64, (pos + other) / 2.0);
                     }
                 }
                 _ => {}
@@ -1598,13 +1599,13 @@ fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     if modifiers.ctrl && modifiers.shift {
         model.refine(-dominant);
     } else if modifiers.ctrl {
-        model.zoom((dominant * ZOOM_PER_POINT).exp(), app.mouse());
+        model.zoom((dominant as f64 * ZOOM_PER_POINT).exp(), app.mouse());
     } else if modifiers.shift {
         model.scroll_held_border(app.mouse(), content, wheel.unit == MouseScrollUnit::Line);
     } else if modifiers.alt {
         model.move_grid(content);
     } else {
-        model.position += content / model.pixels_per_unit;
+        model.position += content.as_dvec2() / model.pixels_per_unit;
     }
 }
 
@@ -1625,12 +1626,17 @@ fn along_held_edges(keys: &ButtonInput<KeyCode>, content: Vec2) -> Vec2 {
     }
 }
 
-fn complex(v: Vec2) -> Complex<f32> {
-    Complex::new(v.x, v.y)
+fn complex(v: Vec2) -> Complex<f64> {
+    Complex::new(v.x as f64, v.y as f64)
 }
 
-fn to_screen(model: &Model, z: Complex<f32>) -> Vec2 {
-    (vec2(z.re, z.im) + model.position) * model.pixels_per_unit
+/// The GPU has no f64, so what it is sent ends up in f32 here.
+fn gpu(z: Complex<f64>) -> Vec2 {
+    vec2(z.re as f32, z.im as f32)
+}
+
+fn to_screen(model: &Model, z: Complex<f64>) -> Vec2 {
+    ((dvec2(z.re, z.im) + model.position) * model.pixels_per_unit).as_vec2()
 }
 
 fn view(app: &App, model: &Model) {
@@ -1645,22 +1651,22 @@ fn view(app: &App, model: &Model) {
         return;
     }
     let params = GridParams {
-        parameter: vec2(model.parameter.re, model.parameter.im),
-        offset: model.position,
-        grid_min: vec2(layout.min.re, layout.min.im),
-        grid_max: vec2(layout.max.re, layout.max.im),
-        spacing: layout.spacing,
+        parameter: gpu(model.parameter),
+        offset: model.position.as_vec2(),
+        grid_min: gpu(layout.min),
+        grid_max: gpu(layout.max),
+        spacing: layout.spacing as f32,
         h_lines: layout.h_lines,
         h_segments: layout.h_segments,
         v_segments: layout.v_segments,
-        pixels_per_unit: model.pixels_per_unit,
-        blend: model.blend(),
+        pixels_per_unit: model.pixels_per_unit as f32,
+        blend: model.blend() as f32,
         peek: model.peek as u32,
         line_width: LINE_WIDTH,
         coloring: model.coloring as u32,
         stretch_octaves: STRETCH_OCTAVES,
-        domain_min: vec2(domain.min.re, domain.min.im),
-        domain_max: vec2(domain.max.re, domain.max.im),
+        domain_min: gpu(domain.min),
+        domain_max: gpu(domain.max),
         half_view: model.half_view,
     };
     // One quad, drawn once per segment; the shader places its corners.
@@ -1673,14 +1679,13 @@ fn view(app: &App, model: &Model) {
 /// lines, major lines at a 1·2·5 step about `MAJOR_SPACING` points apart, and
 /// the axes. Its numbers are drawn by `axis_labels`.
 fn plane_grid(draw: &Draw, model: &Model) {
-    let ppu = model.pixels_per_unit as f64;
+    let ppu = model.pixels_per_unit;
     let major = Step::near(MAJOR_SPACING, ppu);
     let divisions = major.minor_divisions();
     let minor = major.value() / divisions as f64;
     let half = model.half_view;
-    // In f64: far zoomed in, f32 rounding would shift lines by up to a pixel.
-    let lines = |offset: f32, half: f32| {
-        let (offset, reach) = (offset as f64, half as f64 / ppu);
+    let lines = |offset: f64, half: f32| {
+        let reach = half as f64 / ppu;
         Step::lines(minor, -reach - offset, reach - offset)
             .map(move |k| (k, ((k as f64 * minor + offset) * ppu) as f32))
     };
@@ -1753,7 +1758,7 @@ fn math_font(size: f32, italic: bool) -> egui::FontId {
 }
 
 /// Where the plane point `z` is on screen, in egui's points.
-fn plane_to_egui(model: &Model, z: Complex<f32>) -> egui::Pos2 {
+fn plane_to_egui(model: &Model, z: Complex<f64>) -> egui::Pos2 {
     canvas_to_egui(to_screen(model, z), 2.0 * model.half_view)
 }
 
@@ -1764,15 +1769,14 @@ fn plane_to_egui(model: &Model, z: Complex<f32>) -> egui::Pos2 {
 /// are left out.
 fn axis_labels(ctx: &egui::Context, model: &Model) {
     let painter = ctx.layer_painter(egui::LayerId::background());
-    let ppu = model.pixels_per_unit as f64;
+    let ppu = model.pixels_per_unit;
     let step = Step::near(MAJOR_SPACING, ppu);
     let size = 2.0 * model.half_view;
     let (position, half) = (model.position, model.half_view);
-    // In f64, as in `plane_grid`.
-    let x_at = |x: f64| ((x + position.x as f64) * ppu) as f32 + half.x;
-    let y_at = |y: f64| half.y - ((y + position.y as f64) * ppu) as f32;
-    let visible = |offset: f32, half: f32| {
-        let (offset, reach) = (offset as f64, half as f64 / ppu);
+    let x_at = |x: f64| ((x + position.x) * ppu) as f32 + half.x;
+    let y_at = |y: f64| half.y - ((y + position.y) * ppu) as f32;
+    let visible = |offset: f64, half: f32| {
+        let reach = half as f64 / ppu;
         Step::lines(step.value(), -reach - offset, reach - offset)
     };
     let (axis_x, axis_y) = (x_at(0.0), y_at(0.0));
@@ -1870,7 +1874,7 @@ impl MathText {
 /// each: a card by the cursor, and dots at w and at each z, joined by lines.
 fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
     let ppu = model.pixels_per_unit;
-    let w = complex(cursor / ppu - model.position);
+    let w = complex(cursor) / ppu - Complex::new(model.position.x, model.position.y);
     let t = model.blend();
     let unmapped = model.unmapped();
     let (min, max) = model.domain();
@@ -1878,8 +1882,8 @@ fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
         let inside = (min.re..=max.re).contains(&w.re) && (min.im..=max.im).contains(&w.im);
         (if inside { vec![w] } else { Vec::new() }, inside as usize)
     } else {
-        // Not finer than f32 can tell apart near w.
-        let tolerance = (READOUT_TOLERANCE / ppu).max(8.0 * f32::EPSILON * w.norm().max(1.0));
+        // Not finer than f64 can tell apart near w.
+        let tolerance = (READOUT_TOLERANCE / ppu).max(8.0 * f64::EPSILON * w.norm().max(1.0));
         let map = |z| model.map(z);
         let derivative = |z| model.map_derivative(z);
         readout::preimages(map, derivative, (min, max), w, tolerance, READOUT_SOURCES)
@@ -1888,7 +1892,7 @@ fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
     let visuals = &ctx.global_style().visuals;
     let (strong, weak) = (visuals.text_color(), visuals.weak_text_color());
     let mut text = MathText::new(READOUT_SIZE);
-    let magnitude = |z: Complex<f32>| z.re.abs().max(z.im.abs());
+    let magnitude = |z: Complex<f64>| z.re.abs().max(z.im.abs());
     text.math(
         &if unmapped {
             "z = ".to_owned()
@@ -1970,8 +1974,8 @@ fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
 /// A field for a grid edge. The edges have no useful bounds, so a slider has
 /// no track to offer: this drags at a speed that follows the value, which
 /// reaches any size quickly and stays fine near zero, and takes typed values.
-fn edge_field(ui: &mut egui::Ui, edge: &mut f32) -> egui::Response {
-    let speed = EDGE_DRAG_SPEED * (edge.abs() as f64).max(1.0);
+fn edge_field(ui: &mut egui::Ui, edge: &mut f64) -> egui::Response {
+    let speed = EDGE_DRAG_SPEED * edge.abs().max(1.0);
     ui.add(
         egui::DragValue::new(edge)
             .speed(speed)
@@ -1981,7 +1985,7 @@ fn edge_field(ui: &mut egui::Ui, edge: &mut f32) -> egui::Response {
 }
 
 /// A square pad for dragging a complex value within `[-range, range]²`.
-fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) -> egui::Response {
+fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f64>, range: f64) -> egui::Response {
     let size = ui.available_width().min(200.0);
     let (response, painter) =
         ui.allocate_painter(egui::Vec2::splat(size), egui::Sense::click_and_drag());
@@ -1995,12 +1999,12 @@ fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) -> egui::Resp
     let pressed = response.is_pointer_button_down_on() && ui.input(|i| i.pointer.any_pressed());
     if let Some(pos) = response.interact_pointer_pos().filter(|_| pressed && !shift) {
         let t = (pos - rect.min) / rect.size();
-        value.re = egui::lerp(-range..=range, t.x.clamp(0.0, 1.0));
-        value.im = egui::lerp(range..=-range, t.y.clamp(0.0, 1.0));
+        value.re = egui::lerp(-range..=range, t.x.clamp(0.0, 1.0) as f64);
+        value.im = egui::lerp(range..=-range, t.y.clamp(0.0, 1.0) as f64);
     } else if response.dragged() {
         let speed = if shift { FINE } else { 1.0 };
-        let delta = response.drag_delta() * 2.0 * range / rect.width() * speed;
-        *value += Complex::new(delta.x, -delta.y);
+        let delta = response.drag_delta() * speed / rect.width();
+        *value += 2.0 * range * Complex::new(delta.x as f64, -delta.y as f64);
     }
 
     painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
@@ -2009,8 +2013,8 @@ fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) -> egui::Resp
     painter.line_segment([rect.left_center(), rect.right_center()], faint);
 
     let t = egui::vec2(
-        egui::remap_clamp(value.re, -range..=range, 0.0..=1.0),
-        egui::remap_clamp(value.im, range..=-range, 0.0..=1.0),
+        egui::remap_clamp(value.re, -range..=range, 0.0..=1.0) as f32,
+        egui::remap_clamp(value.im, range..=-range, 0.0..=1.0) as f32,
     );
     painter.circle_filled(rect.min + t * rect.size(), 6.0, visuals.fg_stroke.color);
     painter.text(

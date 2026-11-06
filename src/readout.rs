@@ -11,7 +11,7 @@ use num::Complex;
 const SAMPLES: usize = 64;
 /// A sample seeds Newton's method if, going by the map's derivative there,
 /// the point it looks for lies within this many sample cells of it.
-const SEED_REACH: f32 = 2.0;
+const SEED_REACH: f64 = 2.0;
 /// Most runs of Newton's method, from the most promising seeds.
 const MAX_RUNS: usize = 32;
 /// Most steps per run: a few reach a simple root; a double root, where
@@ -19,9 +19,9 @@ const MAX_RUNS: usize = 32;
 const NEWTON_STEPS: usize = 40;
 /// Longest Newton step, in sample cells. Near a critical point Newton can
 /// throw the point across the plane; the other seeds cover what is far away.
-const MAX_NEWTON_STEP: f32 = 2.0;
-/// Significant digits an f32 holds; positions are f32, so more would be noise.
-const F32_DIGITS: i32 = 7;
+const MAX_NEWTON_STEP: f64 = 2.0;
+/// Significant digits an f64 holds; positions are f64, so more would be noise.
+const F64_DIGITS: i32 = 15;
 
 /// The points z of the grid domain `[min, max]` that `map` sends to `w`, at
 /// most `max_count`, closest to w first; and how many there were in all.
@@ -31,26 +31,26 @@ const F32_DIGITS: i32 = 7;
 /// Newton's method on map(z) − w takes each to a root. Roots found from
 /// several seeds are counted once.
 pub fn preimages(
-    map: impl Fn(Complex<f32>) -> Complex<f32>,
-    derivative: impl Fn(Complex<f32>) -> Complex<f32>,
-    (min, max): (Complex<f32>, Complex<f32>),
-    w: Complex<f32>,
-    tolerance: f32,
+    map: impl Fn(Complex<f64>) -> Complex<f64>,
+    derivative: impl Fn(Complex<f64>) -> Complex<f64>,
+    (min, max): (Complex<f64>, Complex<f64>),
+    w: Complex<f64>,
+    tolerance: f64,
     max_count: usize,
-) -> (Vec<Complex<f32>>, usize) {
+) -> (Vec<Complex<f64>>, usize) {
     let size = max - min;
     if !(size.re > 0.0 && size.im > 0.0) {
         return (Vec::new(), 0);
     }
-    let cell = size / SAMPLES as f32;
+    let cell = size / SAMPLES as f64;
     let cell_size = cell.norm();
 
     // Each sample's guess at the root by the map's derivative there, and how
     // many cells away that guess is.
-    let mut seeds: Vec<(f32, Complex<f32>, Complex<f32>)> = (0..SAMPLES * SAMPLES)
+    let mut seeds: Vec<(f64, Complex<f64>, Complex<f64>)> = (0..SAMPLES * SAMPLES)
         .filter_map(|n| {
             let (i, j) = (n % SAMPLES, n / SAMPLES);
-            let z = min + Complex::new((i as f32 + 0.5) * cell.re, (j as f32 + 0.5) * cell.im);
+            let z = min + Complex::new((i as f64 + 0.5) * cell.re, (j as f64 + 0.5) * cell.im);
             let step = (map(z) - w) / derivative(z);
             let cells = step.norm() / cell_size;
             (cells <= SEED_REACH).then_some((cells, z, z - step))
@@ -58,13 +58,13 @@ pub fn preimages(
         .collect();
     seeds.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    let inside = |z: Complex<f32>| {
+    let inside = |z: Complex<f64>| {
         let slack = 1e-3 * cell_size;
         (min.re - slack..=max.re + slack).contains(&z.re)
             && (min.im - slack..=max.im + slack).contains(&z.im)
     };
     // Every root found, in the domain or just outside it.
-    let mut found: Vec<Complex<f32>> = Vec::new();
+    let mut found: Vec<Complex<f64>> = Vec::new();
     let mut runs = 0;
     for &(_, seed, guess) in &seeds {
         // Seeds that point at a root already found would most likely find
@@ -98,13 +98,13 @@ pub fn preimages(
 /// `max_step`. It keeps going after map(z) is within `tolerance` of w until
 /// the steps vanish, so runs that reach the same root agree closely.
 fn newton(
-    map: &impl Fn(Complex<f32>) -> Complex<f32>,
-    derivative: &impl Fn(Complex<f32>) -> Complex<f32>,
-    mut z: Complex<f32>,
-    w: Complex<f32>,
-    tolerance: f32,
-    max_step: f32,
-) -> Option<Complex<f32>> {
+    map: &impl Fn(Complex<f64>) -> Complex<f64>,
+    derivative: &impl Fn(Complex<f64>) -> Complex<f64>,
+    mut z: Complex<f64>,
+    w: Complex<f64>,
+    tolerance: f64,
+    max_step: f64,
+) -> Option<Complex<f64>> {
     for _ in 0..NEWTON_STEPS {
         let mut step = (map(z) - w) / derivative(z);
         if !(step.re.is_finite() && step.im.is_finite()) {
@@ -123,18 +123,18 @@ fn newton(
 }
 
 /// Decimals that tell apart points one screen point apart, where one plane
-/// unit takes `points_per_unit` points; at most what an f32 of size
+/// unit takes `points_per_unit` points; at most what an f64 of size
 /// `magnitude` holds.
-pub fn decimals(points_per_unit: f32, magnitude: f32) -> usize {
+pub fn decimals(points_per_unit: f64, magnitude: f64) -> usize {
     let wanted = points_per_unit.max(1.0).log10().ceil() as i32;
     let whole_digits = magnitude.abs().max(1.0).log10().floor() as i32 + 1;
-    wanted.min(F32_DIGITS - whole_digits).max(0) as usize
+    wanted.min(F64_DIGITS - whole_digits).max(0) as usize
 }
 
 /// `z` as x + yi, with `decimals` decimals in each part and real minus signs.
-pub fn complex(z: Complex<f32>, decimals: usize) -> String {
+pub fn complex(z: Complex<f64>, decimals: usize) -> String {
     // Adding zero turns −0 into 0, so −0.0001 rounded to "−0.00" can't show.
-    let rounded = |v: f32| {
+    let rounded = |v: f64| {
         let scale = 10f64.powi(decimals as i32);
         (v as f64 * scale).round() / scale + 0.0
     };
@@ -145,14 +145,14 @@ pub fn complex(z: Complex<f32>, decimals: usize) -> String {
 
 /// `x` with three significant digits, or as a whole number when larger, for
 /// how much a map stretches: 0.431, 2.31, 23.1, 231, 2314.
-pub fn significant(x: f32) -> String {
+pub fn significant(x: f64) -> String {
     let whole_digits = x.abs().max(1e-30).log10().floor() as i32 + 1;
     let decimals = (3 - whole_digits).clamp(0, 6) as usize;
     with_minus_signs(&format!("{x:.decimals$}"))
 }
 
 /// An angle in radians as whole degrees, with a real minus sign.
-pub fn degrees(angle: f32) -> String {
+pub fn degrees(angle: f64) -> String {
     with_minus_signs(&format!("{:.0}°", angle.to_degrees().round() + 0.0))
 }
 
@@ -161,18 +161,18 @@ mod tests {
     use super::*;
     use crate::expr;
 
-    const TOLERANCE: f32 = 1e-4;
+    const TOLERANCE: f64 = 1e-4;
 
-    fn domain(x_min: f32, x_max: f32, y_min: f32, y_max: f32) -> (Complex<f32>, Complex<f32>) {
+    fn domain(x_min: f64, x_max: f64, y_min: f64, y_max: f64) -> (Complex<f64>, Complex<f64>) {
         (Complex::new(x_min, y_min), Complex::new(x_max, y_max))
     }
 
     /// The points of `domain` that `formula` (with p = 1) sends to `w`.
     fn sources(
         formula: &str,
-        domain: (Complex<f32>, Complex<f32>),
-        w: Complex<f32>,
-    ) -> Vec<Complex<f32>> {
+        domain: (Complex<f64>, Complex<f64>),
+        w: Complex<f64>,
+    ) -> Vec<Complex<f64>> {
         let f = expr::parse(formula).unwrap();
         let p = Complex::new(1.0, 0.0);
         preimages(
@@ -186,7 +186,7 @@ mod tests {
         .0
     }
 
-    fn assert_roots(found: &[Complex<f32>], expected: &[Complex<f32>]) {
+    fn assert_roots(found: &[Complex<f64>], expected: &[Complex<f64>]) {
         assert_eq!(
             found.len(),
             expected.len(),
@@ -222,7 +222,7 @@ mod tests {
         let z = Complex::new(0.5, 1.0);
         let w = z.exp();
         assert_roots(&sources("exp(z)", domain(-1.0, 1.0, -3.0, 3.0), w), &[z]);
-        let below = z - Complex::new(0.0, std::f32::consts::TAU);
+        let below = z - Complex::new(0.0, std::f64::consts::TAU);
         assert_roots(
             &sources("exp(z)", domain(-1.0, 1.0, -7.0, 7.0), w),
             &[z, below],
@@ -267,7 +267,7 @@ mod tests {
         let stages = expr::parse("cos(2 * z) + 1").unwrap().stages();
         let ends = expr::Homotopy::of_stage(&stages, 3).unwrap();
         let p = Complex::new(1.0, 0.0);
-        let source = Complex::new(0.4f32, 0.3);
+        let source = Complex::new(0.4f64, 0.3);
         let w = (2.0 * source).cos();
         for (t, w) in [(0.0, w), (1.0, w + 1.0), (0.5, w + 0.5)] {
             let (found, _) = preimages(
@@ -294,9 +294,9 @@ mod tests {
         assert_eq!(decimals(100.0, 0.5), 2);
         assert_eq!(decimals(1e6, 0.5), 6);
         assert_eq!(decimals(1.0, 0.5), 0);
-        // An f32 near 50 has 5 decimals to give, near 2e7 none.
-        assert_eq!(decimals(1e6, 50.0), 5);
-        assert_eq!(decimals(1e6, 2e7), 0);
+        // An f64 near 50 has 13 decimals to give, near 2e15 none.
+        assert_eq!(decimals(1e15, 50.0), 13);
+        assert_eq!(decimals(1e15, 2e15), 0);
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(significant(0.43149), "0.431");
         assert_eq!(significant(231.4), "231");
         assert_eq!(significant(2314.0), "2314");
-        assert_eq!(degrees(-145.2f32.to_radians()), "−145°");
-        assert_eq!(degrees(-0.2f32.to_radians()), "0°");
+        assert_eq!(degrees(-145.2f64.to_radians()), "−145°");
+        assert_eq!(degrees(-0.2f64.to_radians()), "0°");
     }
 }

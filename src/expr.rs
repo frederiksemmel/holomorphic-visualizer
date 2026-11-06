@@ -34,7 +34,7 @@ pub const FUNCTIONS: [(&str, &str); 10] = [
 
 /// Integer powers up to this size are multiplied out (no branch cut);
 /// others go through `exp(w log z)`.
-const MAX_INTEGER_POWER: f32 = 64.0;
+const MAX_INTEGER_POWER: f64 = 64.0;
 /// Parentheses and operators nested deeper than this are rejected, so the
 /// recursive parser can't overflow the stack.
 const MAX_DEPTH: usize = 64;
@@ -126,14 +126,14 @@ impl Function {
     }
 
     /// f(z, p), computed the way the grid shader computes it.
-    pub fn eval(&self, z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+    pub fn eval(&self, z: Complex<f64>, p: Complex<f64>) -> Complex<f64> {
         self.0.eval(z, p)
     }
 
     /// f'(z) by central differences, with the step `f_prime` in
-    /// `src/grid.wgsl` uses: large enough that f32 rounding in f doesn't
+    /// `src/grid.wgsl` uses: large enough that f64 rounding in f doesn't
     /// swamp the difference, and relative to |z| so it stays so far out.
-    pub fn derivative(&self, z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+    pub fn derivative(&self, z: Complex<f64>, p: Complex<f64>) -> Complex<f64> {
         if self.is_identity() {
             return Complex::new(1.0, 0.0);
         }
@@ -185,14 +185,14 @@ impl Homotopy {
     }
 
     /// At blend `t` the grid is where it started: every point is at z itself.
-    pub fn unmapped(&self, t: f32) -> bool {
+    pub fn unmapped(&self, t: f64) -> bool {
         self.start.is_identity() && (t == 0.0 || self.end.is_identity())
     }
 
     /// Where the grid point `z` is at blend `t`: h(z) = s(z) + t·(e(z) − s(z)),
     /// as `g` in `src/grid.wgsl` computes it, for the start s and end e. At
     /// t = 0 it is s(z) exactly, even where e blows up.
-    pub fn map(&self, z: Complex<f32>, p: Complex<f32>, t: f32) -> Complex<f32> {
+    pub fn map(&self, z: Complex<f64>, p: Complex<f64>, t: f64) -> Complex<f64> {
         let start = self.start.eval(z, p);
         if t == 0.0 {
             start
@@ -202,7 +202,7 @@ impl Homotopy {
     }
 
     /// h'(z) = s'(z) + t·(e'(z) − s'(z)).
-    pub fn derivative(&self, z: Complex<f32>, p: Complex<f32>, t: f32) -> Complex<f32> {
+    pub fn derivative(&self, z: Complex<f64>, p: Complex<f64>, t: f64) -> Complex<f64> {
         let start = self.start.derivative(z, p);
         if t == 0.0 {
             start
@@ -227,7 +227,7 @@ impl Homotopy {
 
 #[derive(Clone, Debug, PartialEq)]
 enum TokenKind {
-    Number(f32),
+    Number(f64),
     Name(String),
     Operator(char),
     Open,
@@ -281,11 +281,12 @@ fn tokenize(formula: &str) -> Result<Vec<Token>, ParseError> {
                     }
                 }
                 let text: String = chars[start..i].iter().collect();
-                let value: f32 = text.parse().map_err(|_| ParseError {
+                let value: f64 = text.parse().map_err(|_| ParseError {
                     message: format!("'{text}' is not a number"),
                     position: start,
                 })?;
-                if !value.is_finite() {
+                // The formula also goes to the GPU, which has only f32.
+                if !(value as f32).is_finite() {
                     return Err(ParseError {
                         message: format!("{text} is too large"),
                         position: start,
@@ -337,7 +338,7 @@ fn tokenize(formula: &str) -> Result<Vec<Token>, ParseError> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Expr {
-    Number(f32),
+    Number(f64),
     Z,
     P,
     I,
@@ -362,8 +363,8 @@ impl fmt::Display for Expr {
             }
         };
         match self {
-            Expr::Number(n) if *n == std::f32::consts::PI => write!(f, "π"),
-            Expr::Number(n) if *n == std::f32::consts::E => write!(f, "e"),
+            Expr::Number(n) if *n == std::f64::consts::PI => write!(f, "π"),
+            Expr::Number(n) if *n == std::f64::consts::E => write!(f, "e"),
             Expr::Number(n) => write!(f, "{n}"),
             Expr::Z => write!(f, "z"),
             Expr::P => write!(f, "p"),
@@ -413,8 +414,9 @@ impl Expr {
 
     fn to_wgsl(&self) -> String {
         match self {
-            // `{:?}` always writes a decimal point or exponent, so WGSL reads a float.
-            Expr::Number(n) => format!("vec2({n:?}, 0.0)"),
+            // `{:?}` always writes a decimal point or exponent, so WGSL reads a
+            // float. The GPU has no f64, and rejects a literal that doesn't fit.
+            Expr::Number(n) => format!("vec2({:?}, 0.0)", *n as f32),
             Expr::Z => "z".into(),
             Expr::P => "p".into(),
             Expr::I => "I".into(),
@@ -431,7 +433,7 @@ impl Expr {
         }
     }
 
-    fn eval(&self, z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+    fn eval(&self, z: Complex<f64>, p: Complex<f64>) -> Complex<f64> {
         match self {
             Expr::Number(n) => Complex::new(*n, 0.0),
             Expr::Z => z,
@@ -477,7 +479,7 @@ impl Expr {
 // The helpers in `src/complex.wgsl`, in the same order of operations.
 // Multiplication, addition and negation are num's, which compute the same.
 
-fn cdiv(a: Complex<f32>, b: Complex<f32>) -> Complex<f32> {
+fn cdiv(a: Complex<f64>, b: Complex<f64>) -> Complex<f64> {
     let d = b.re * b.re + b.im * b.im;
     Complex::new(
         (a.re * b.re + a.im * b.im) / d,
@@ -485,22 +487,22 @@ fn cdiv(a: Complex<f32>, b: Complex<f32>) -> Complex<f32> {
     )
 }
 
-fn cexp(z: Complex<f32>) -> Complex<f32> {
+fn cexp(z: Complex<f64>) -> Complex<f64> {
     z.re.exp() * Complex::new(z.im.cos(), z.im.sin())
 }
 
 /// Principal branch: the cut runs along the negative real axis.
-fn clog(z: Complex<f32>) -> Complex<f32> {
+fn clog(z: Complex<f64>) -> Complex<f64> {
     Complex::new(z.norm().ln(), z.im.atan2(z.re))
 }
 
-fn csqrt(z: Complex<f32>) -> Complex<f32> {
+fn csqrt(z: Complex<f64>) -> Complex<f64> {
     let angle = 0.5 * z.im.atan2(z.re);
     z.norm().sqrt() * Complex::new(angle.cos(), angle.sin())
 }
 
 /// z^n by repeated squaring: exact, and no branch cut.
-fn cpowi(z: Complex<f32>, n: i32) -> Complex<f32> {
+fn cpowi(z: Complex<f64>, n: i32) -> Complex<f64> {
     let mut result = Complex::new(1.0, 0.0);
     let mut base = z;
     let mut k = n.unsigned_abs();
@@ -518,19 +520,19 @@ fn cpowi(z: Complex<f32>, n: i32) -> Complex<f32> {
     }
 }
 
-fn csin(z: Complex<f32>) -> Complex<f32> {
+fn csin(z: Complex<f64>) -> Complex<f64> {
     Complex::new(z.re.sin() * z.im.cosh(), z.re.cos() * z.im.sinh())
 }
 
-fn ccos(z: Complex<f32>) -> Complex<f32> {
+fn ccos(z: Complex<f64>) -> Complex<f64> {
     Complex::new(z.re.cos() * z.im.cosh(), -z.re.sin() * z.im.sinh())
 }
 
-fn csinh(z: Complex<f32>) -> Complex<f32> {
+fn csinh(z: Complex<f64>) -> Complex<f64> {
     Complex::new(z.re.sinh() * z.im.cos(), z.re.cosh() * z.im.sin())
 }
 
-fn ccosh(z: Complex<f32>) -> Complex<f32> {
+fn ccosh(z: Complex<f64>) -> Complex<f64> {
     Complex::new(z.re.cosh() * z.im.cos(), z.re.sinh() * z.im.sin())
 }
 
@@ -654,8 +656,8 @@ impl Parser {
                 "z" => Ok(Expr::Z),
                 "p" => Ok(Expr::P),
                 "i" => Ok(Expr::I),
-                "pi" => Ok(Expr::Number(std::f32::consts::PI)),
-                "e" => Ok(Expr::Number(std::f32::consts::E)),
+                "pi" => Ok(Expr::Number(std::f64::consts::PI)),
+                "e" => Ok(Expr::Number(std::f64::consts::E)),
                 _ => {
                     let open = self.position();
                     let Some(&(_, helper)) = FUNCTIONS.iter().find(|(f, _)| *f == name) else {
@@ -918,7 +920,7 @@ mod tests {
         assert_close(ends.map(z, p, 0.25), start + 0.25 * (end - start), "t = 1/4");
 
         let (start, end) = (p, -p * (p * z).sin());
-        let close = |a: Complex<f32>, b: Complex<f32>| (a - b).norm() <= 1e-3 * b.norm().max(1.0);
+        let close = |a: Complex<f64>, b: Complex<f64>| (a - b).norm() <= 1e-3 * b.norm().max(1.0);
         assert!(close(ends.derivative(z, p, 0.0), start));
         assert!(close(ends.derivative(z, p, 1.0), end));
         assert!(close(ends.derivative(z, p, 0.25), start + 0.25 * (end - start)));
@@ -1024,11 +1026,11 @@ mod tests {
         assert!(error("1e39").message.contains("too large"));
     }
 
-    fn eval(formula: &str, z: Complex<f32>) -> Complex<f32> {
+    fn eval(formula: &str, z: Complex<f64>) -> Complex<f64> {
         parse(formula).unwrap().eval(z, Complex::new(0.5, -2.0))
     }
 
-    fn assert_close(a: Complex<f32>, b: Complex<f32>, what: &str) {
+    fn assert_close(a: Complex<f64>, b: Complex<f64>, what: &str) {
         assert!((a - b).norm() <= 1e-5 * b.norm().max(1.0), "{what}: {a} vs {b}");
     }
 
@@ -1041,11 +1043,11 @@ mod tests {
         assert_eq!(eval("z^-1", i), -i);
         assert_eq!(eval("1/z", i), -i);
         assert_eq!(eval("p", i), Complex::new(0.5, -2.0));
-        assert_eq!(eval("2pi i z", one), Complex::new(0.0, 2.0 * std::f32::consts::PI));
+        assert_eq!(eval("2pi i z", one), Complex::new(0.0, 2.0 * std::f64::consts::PI));
         assert_close(eval("exp(i pi)", one), -one, "exp(iπ)");
         // On the cut, the principal branch takes the upper side, as atan2 does.
         let minus_four = Complex::new(-4.0, 0.0);
-        assert_close(eval("log(z)", Complex::new(-1.0, 0.0)), std::f32::consts::PI * i, "log(-1)");
+        assert_close(eval("log(z)", Complex::new(-1.0, 0.0)), std::f64::consts::PI * i, "log(-1)");
         assert_close(eval("sqrt(z)", minus_four), 2.0 * i, "sqrt(-4)");
         assert_close(eval("z^0.5", minus_four), 2.0 * i, "(-4)^0.5");
         assert_close(eval("z^(1/2)", minus_four), 2.0 * i, "(-4)^(1/2)");
@@ -1063,7 +1065,7 @@ mod tests {
             Complex::new(2.0, -1.5),
             Complex::new(-0.4, -0.9),
         ];
-        let cases: [(&str, fn(Complex<f32>, Complex<f32>) -> Complex<f32>); 15] = [
+        let cases: [(&str, fn(Complex<f64>, Complex<f64>) -> Complex<f64>); 15] = [
             ("exp(z)", |z, _| z.exp()),
             ("log(z)", |z, _| z.ln()),
             ("ln(z)", |z, _| z.ln()),
@@ -1091,7 +1093,7 @@ mod tests {
     #[test]
     fn derivative_by_finite_differences() {
         let p = Complex::new(1.0, 0.0);
-        let close = |a: Complex<f32>, b: Complex<f32>| (a - b).norm() <= 1e-3 * b.norm().max(1.0);
+        let close = |a: Complex<f64>, b: Complex<f64>| (a - b).norm() <= 1e-3 * b.norm().max(1.0);
         for z in [Complex::new(1.0, 1.0), Complex::new(-0.2, 0.3), Complex::new(8.0, -3.0)] {
             let cube = parse("z^3").unwrap().derivative(z, p);
             assert!(close(cube, 3.0 * z * z), "(z^3)' at {z}: {cube}");

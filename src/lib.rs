@@ -12,10 +12,10 @@ pub mod scene;
 pub const COMPLEX_WGSL: &str = include_str!("complex.wgsl");
 
 /// Highest grid refinement level; `2^MAX_RESOLUTION` lines per unit.
-pub const MAX_RESOLUTION: f32 = 7.0;
+pub const MAX_RESOLUTION: f64 = 7.0;
 
 /// The refinement level `resolution` asks for: `2^level` lines per unit.
-fn level(resolution: f32) -> i32 {
+fn level(resolution: f64) -> i32 {
     resolution.floor().clamp(0.0, MAX_RESOLUTION) as i32
 }
 
@@ -26,15 +26,15 @@ fn level(resolution: f32) -> i32 {
 /// Only valid while the grid is drawn unmapped; under a map, lines from
 /// anywhere in the domain can land in the view.
 pub fn clip_to_view(
-    resolution: f32,
-    min: Complex<f32>,
-    max: Complex<f32>,
-    view_min: Complex<f32>,
-    view_max: Complex<f32>,
-) -> (Complex<f32>, Complex<f32>) {
-    let lines_per_unit = 2.0f32.powi(level(resolution));
-    let outward_down = |v: f32| (v * lines_per_unit).floor() / lines_per_unit;
-    let outward_up = |v: f32| (v * lines_per_unit).ceil() / lines_per_unit;
+    resolution: f64,
+    min: Complex<f64>,
+    max: Complex<f64>,
+    view_min: Complex<f64>,
+    view_max: Complex<f64>,
+) -> (Complex<f64>, Complex<f64>) {
+    let lines_per_unit = 2.0f64.powi(level(resolution));
+    let outward_down = |v: f64| (v * lines_per_unit).floor() / lines_per_unit;
+    let outward_up = |v: f64| (v * lines_per_unit).ceil() / lines_per_unit;
     (
         Complex::new(
             min.re.max(outward_down(view_min.re)),
@@ -54,10 +54,10 @@ pub fn clip_to_view(
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GridLayout {
     /// Lower-left and upper-right grid crossings.
-    pub min: Complex<f32>,
-    pub max: Complex<f32>,
+    pub min: Complex<f64>,
+    pub max: Complex<f64>,
     /// Distance between neighbouring lines.
-    pub spacing: f32,
+    pub spacing: f64,
     /// Lines of constant y (horizontal) and of constant x (vertical).
     pub h_lines: u32,
     pub v_lines: u32,
@@ -72,15 +72,15 @@ impl GridLayout {
     /// total: the sampling gets coarser first, and if even one segment per line
     /// is too many, the lines get further apart than `resolution` asks for.
     pub fn new(
-        resolution: f32,
-        x_min: f32,
-        x_max: f32,
-        y_min: f32,
-        y_max: f32,
-        max_density: f32,
+        resolution: f64,
+        x_min: f64,
+        x_max: f64,
+        y_min: f64,
+        y_max: f64,
+        max_density: f64,
         max_segments: u32,
     ) -> Self {
-        let lines = |min: f32, max: f32, lines_per_unit: f32| {
+        let lines = |min: f64, max: f64, lines_per_unit: f64| {
             if max < min {
                 0
             } else {
@@ -89,9 +89,9 @@ impl GridLayout {
         };
         let mut level = level(resolution);
         let (spacing, min, max, h_lines, v_lines) = loop {
-            let lines_per_unit = 2.0f32.powi(level);
-            let snap_up = |v: f32| (v * lines_per_unit).ceil() / lines_per_unit;
-            let snap_down = |v: f32| (v * lines_per_unit).floor() / lines_per_unit;
+            let lines_per_unit = 2.0f64.powi(level);
+            let snap_up = |v: f64| (v * lines_per_unit).ceil() / lines_per_unit;
+            let snap_down = |v: f64| (v * lines_per_unit).floor() / lines_per_unit;
             let min = Complex::new(snap_up(x_min), snap_up(y_min));
             let max = Complex::new(snap_down(x_max), snap_down(y_max));
             let h_lines = lines(min.im, max.im, lines_per_unit);
@@ -107,10 +107,10 @@ impl GridLayout {
         // Each line rounds its share down but takes at least one segment, so it
         // can use up to one more than `length * density`. Leaving one per line
         // out of the budget keeps the total within `max_segments`.
-        let total_length = h_lines as f32 * width + v_lines as f32 * height;
-        let spare = max_segments.saturating_sub(h_lines.saturating_add(v_lines)) as f32;
-        let density = max_density.min(spare / total_length.max(f32::EPSILON));
-        let segments = |length: f32| {
+        let total_length = h_lines as f64 * width + v_lines as f64 * height;
+        let spare = max_segments.saturating_sub(h_lines.saturating_add(v_lines)) as f64;
+        let density = max_density.min(spare / total_length.max(f64::EPSILON));
+        let segments = |length: f64| {
             if length > 0.0 {
                 ((length * density).floor() as u32).max(1)
             } else {
@@ -135,20 +135,20 @@ impl GridLayout {
 
     /// Endpoints of segment `i`, for `i < segment_count()`. Horizontal lines
     /// come first, bottom to top, then vertical lines, left to right.
-    pub fn segment(&self, i: u32) -> (Complex<f32>, Complex<f32>) {
+    pub fn segment(&self, i: u32) -> (Complex<f64>, Complex<f64>) {
         let h_total = self.h_lines * self.h_segments;
         if i < h_total {
             let (line, k) = (i / self.h_segments, i % self.h_segments);
-            let y = self.min.im + line as f32 * self.spacing;
-            let step = (self.max.re - self.min.re) / self.h_segments as f32;
-            let x = |k: u32| self.min.re + k as f32 * step;
+            let y = self.min.im + line as f64 * self.spacing;
+            let step = (self.max.re - self.min.re) / self.h_segments as f64;
+            let x = |k: u32| self.min.re + k as f64 * step;
             (Complex::new(x(k), y), Complex::new(x(k + 1), y))
         } else {
             let i = i - h_total;
             let (line, k) = (i / self.v_segments, i % self.v_segments);
-            let x = self.min.re + line as f32 * self.spacing;
-            let step = (self.max.im - self.min.im) / self.v_segments as f32;
-            let y = |k: u32| self.min.im + k as f32 * step;
+            let x = self.min.re + line as f64 * self.spacing;
+            let step = (self.max.im - self.min.im) / self.v_segments as f64;
+            let y = |k: u32| self.min.im + k as f64 * step;
             (Complex::new(x, y(k)), Complex::new(x, y(k + 1)))
         }
     }
@@ -218,7 +218,7 @@ mod tests {
         }
     }
 
-    fn clipped_layout(view_min: Complex<f32>, view_max: Complex<f32>) -> GridLayout {
+    fn clipped_layout(view_min: Complex<f64>, view_max: Complex<f64>) -> GridLayout {
         let (min, max) = (Complex::new(-15.0, -15.0), Complex::new(15.0, 15.0));
         let (min, max) = clip_to_view(0.0, min, max, view_min, view_max);
         GridLayout::new(0.0, min.re, max.re, min.im, max.im, 4.0, u32::MAX)

@@ -14,8 +14,8 @@ pub struct Example {
     /// Further reading: (link text, URL).
     pub links: &'static [(&'static str, &'static str)],
     /// x min, x max, y min, y max.
-    pub grid: [f32; 4],
-    pub parameter: Complex<f32>,
+    pub grid: [f64; 4],
+    pub parameter: Complex<f64>,
 }
 
 /// The functions on offer in the control window. The first one is what the

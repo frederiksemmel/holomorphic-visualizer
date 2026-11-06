@@ -15,7 +15,7 @@ const REFINE_ROUNDS: usize = 24;
 /// Near a critical point of the map (h' ≈ 0) a small cursor motion asks for
 /// an arbitrarily large move of the source border; capping it makes the
 /// border lag behind the cursor there instead of leaping across the plane.
-pub const MAX_STEP: f32 = 0.25;
+pub const MAX_STEP: f64 = 0.25;
 
 /// One of the four sides of the grid domain `[x_min, x_max, y_min, y_max]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,9 +40,9 @@ impl Border {
     }
 
     /// The point a fraction `s` of the way along this border of `grid`.
-    pub fn point(self, grid: [f32; 4], s: f32) -> Complex<f32> {
+    pub fn point(self, grid: [f64; 4], s: f64) -> Complex<f64> {
         let [x_min, x_max, y_min, y_max] = grid;
-        let lerp = |a: f32, b: f32| a + (b - a) * s;
+        let lerp = |a: f64, b: f64| a + (b - a) * s;
         match self {
             Border::XMin => Complex::new(x_min, lerp(y_min, y_max)),
             Border::XMax => Complex::new(x_max, lerp(y_min, y_max)),
@@ -56,7 +56,7 @@ impl Border {
     /// units. Moving a line of constant x by δ moves its image by h'·δ, and
     /// the image runs along h'·i, so only the part of delta / h' across the
     /// line counts: its real part for x, its imaginary part for y.
-    pub fn drag_step(self, derivative: Complex<f32>, delta: Complex<f32>) -> f32 {
+    pub fn drag_step(self, derivative: Complex<f64>, delta: Complex<f64>) -> f64 {
         let across = delta / derivative;
         capped(if self.vertical() {
             across.re
@@ -73,7 +73,7 @@ impl Border {
     /// often along the border, so for a wheel a scroll that goes more along
     /// it than across counts as across: up or right moves it up or right.
     /// Zero where the map blows up.
-    pub fn scroll_across(self, derivative: Complex<f32>, delta: Complex<f32>, wheel: bool) -> f32 {
+    pub fn scroll_across(self, derivative: Complex<f64>, delta: Complex<f64>, wheel: bool) -> f64 {
         // The image of the border runs along h'·i for x, h' for y; it is
         // conformal, so its normal on screen runs along h' for x, h'·i for y.
         let normal = if self.vertical() {
@@ -93,7 +93,7 @@ impl Border {
 }
 
 /// `step`, at most [`MAX_STEP`] either way; nothing where the map blows up.
-fn capped(step: f32) -> f32 {
+fn capped(step: f64) -> f64 {
     if step.is_finite() {
         step.clamp(-MAX_STEP, MAX_STEP)
     } else {
@@ -106,26 +106,26 @@ fn capped(step: f32) -> f32 {
 /// anywhere on the border.
 pub fn nearest_on(
     border: Border,
-    grid: [f32; 4],
-    to_screen: &impl Fn(Complex<f32>) -> Complex<f32>,
-    target: Complex<f32>,
-) -> Option<(Complex<f32>, f32)> {
-    let distance = |s: f32| {
+    grid: [f64; 4],
+    to_screen: &impl Fn(Complex<f64>) -> Complex<f64>,
+    target: Complex<f64>,
+) -> Option<(Complex<f64>, f64)> {
+    let distance = |s: f64| {
         let d = (to_screen(border.point(grid, s)) - target).norm_sqr();
-        if d.is_finite() { d } else { f32::INFINITY }
+        if d.is_finite() { d } else { f64::INFINITY }
     };
-    let step = 1.0 / SAMPLES as f32;
+    let step = 1.0 / SAMPLES as f64;
     let (best, best_distance) = (0..=SAMPLES)
-        .map(|i| (i, distance(i as f32 * step)))
+        .map(|i| (i, distance(i as f64 * step)))
         .min_by(|a, b| a.1.total_cmp(&b.1))?;
-    if best_distance == f32::INFINITY {
+    if best_distance == f64::INFINITY {
         return None;
     }
     // The image between the neighbouring samples is close to a line, so the
     // distance has a single minimum there.
     let (mut lo, mut hi) = (
-        (best as f32 - 1.0).max(0.0) * step,
-        (best as f32 + 1.0).min(SAMPLES as f32) * step,
+        (best as f64 - 1.0).max(0.0) * step,
+        (best as f64 + 1.0).min(SAMPLES as f64) * step,
     );
     for _ in 0..REFINE_ROUNDS {
         let (a, b) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
@@ -136,7 +136,7 @@ pub fn nearest_on(
         }
     }
     let s = 0.5 * (lo + hi);
-    let (s, d) = [(s, distance(s)), (best as f32 * step, best_distance)]
+    let (s, d) = [(s, distance(s)), (best as f64 * step, best_distance)]
         .into_iter()
         .min_by(|a, b| a.1.total_cmp(&b.1))?;
     Some((border.point(grid, s), d.sqrt()))
@@ -145,10 +145,10 @@ pub fn nearest_on(
 /// The border of `grid` drawn closest to `target`, and the source point on
 /// it that lands there.
 pub fn nearest_border(
-    grid: [f32; 4],
-    to_screen: &impl Fn(Complex<f32>) -> Complex<f32>,
-    target: Complex<f32>,
-) -> Option<(Border, Complex<f32>)> {
+    grid: [f64; 4],
+    to_screen: &impl Fn(Complex<f64>) -> Complex<f64>,
+    target: Complex<f64>,
+) -> Option<(Border, Complex<f64>)> {
     Border::ALL
         .into_iter()
         .filter_map(|border| {
@@ -164,11 +164,11 @@ mod tests {
     use super::*;
     use crate::expr;
 
-    const PPU: f32 = 100.0;
-    const GRID: [f32; 4] = [-1.0, 1.0, -1.0, 1.0];
+    const PPU: f64 = 100.0;
+    const GRID: [f64; 4] = [-1.0, 1.0, -1.0, 1.0];
 
     /// Draws the grid mapped by `formula` (fully blended) at PPU, centred.
-    fn screen(formula: &str) -> impl Fn(Complex<f32>) -> Complex<f32> {
+    fn screen(formula: &str) -> impl Fn(Complex<f64>) -> Complex<f64> {
         let f = expr::parse(formula).unwrap();
         move |z| f.eval(z, Complex::new(1.0, 0.0)) * PPU
     }
@@ -218,7 +218,7 @@ mod tests {
 
     /// Drags the border nearest `start` by `delta` screen points and checks
     /// that its new image passes close to where the cursor went.
-    fn check_drag(formula: &str, grid: [f32; 4], start: Complex<f32>, delta: Complex<f32>) {
+    fn check_drag(formula: &str, grid: [f64; 4], start: Complex<f64>, delta: Complex<f64>) {
         let f = expr::parse(formula).unwrap();
         let p = Complex::new(1.0, 0.0);
         let to_screen = screen(formula);
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn scrolling_counts_the_part_across_the_border() {
-        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-5;
         let one = Complex::new(1.0, 0.0);
         assert!(close(Border::XMax.scroll_across(one, Complex::new(10.0, 2.0), false), 10.0));
         assert!(close(Border::YMin.scroll_across(one, Complex::new(2.0, -10.0), false), -10.0));
@@ -277,14 +277,14 @@ mod tests {
 
     #[test]
     fn a_wheel_along_the_border_moves_it_up_or_right() {
-        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-5;
         let one = Complex::new(1.0, 0.0);
         // A wheel scrolling vertically, along x = c: up moves it right.
         assert!(close(Border::XMin.scroll_across(one, Complex::new(0.0, 10.0), true), 10.0));
         assert!(close(Border::XMax.scroll_across(one, Complex::new(0.0, -10.0), true), -10.0));
         // Sideways, along y = c: right moves it up.
         assert!(close(Border::YMax.scroll_across(one, Complex::new(10.0, 0.0), true), 10.0));
-        let nan = Complex::new(f32::NAN, 0.0);
+        let nan = Complex::new(f64::NAN, 0.0);
         assert_eq!(Border::XMax.scroll_across(nan, Complex::new(1.0, 0.0), true), 0.0);
     }
 
