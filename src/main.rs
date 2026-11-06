@@ -7,11 +7,11 @@ use conformal_visualizer::examples::EXAMPLES;
 use conformal_visualizer::expr::{self, Function, Homotopy, ParseError};
 use conformal_visualizer::scene::{Coloring, DEFAULT_PIXELS_PER_UNIT, DEFAULT_RESOLUTION, Scene};
 use conformal_visualizer::patch::Patch;
-use conformal_visualizer::route::{Leg, Path, Route};
+use conformal_visualizer::route::{Mix, Path, Route};
 use conformal_visualizer::{COMPLEX_WGSL, GridLayout, clip_to_view, morph, readout};
 use nannou::prelude::render::ShaderModel;
 use nannou::prelude::*;
-use bevy::math::{DVec2, dvec2};
+use bevy::math::{DVec2, UVec3, dvec2, uvec3};
 use num::Complex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -191,10 +191,9 @@ struct GridParams {
     h_segments: u32,
     v_segments: u32,
     pixels_per_unit: f32,
-    blend: f32,
     peek: u32,
-    from_stage: u32,
-    to_stage: u32,
+    stages: UVec3,
+    weights: Vec3,
     color_stage: u32,
     line_width: f32,
     coloring: u32,
@@ -440,39 +439,29 @@ impl Model {
     }
 
     /// How far to blend from the start of the homotopy towards its end.
-    fn blend(&self) -> f64 {
-        if self.peek { 0.0 } else { self.leg().weight }
-    }
-
     /// The stages there are, not counting the identity.
     fn count(&self) -> usize {
         self.chain.len() - 1
     }
 
-    /// The stages being blended right now, and how far.
-    fn leg(&self) -> Leg {
-        self.route.leg(self.homotopy)
+    /// What shows right now.
+    fn mix(&self) -> Mix {
+        self.route.mix(self.homotopy)
     }
 
     fn ends(&self) -> Homotopy<'_> {
-        let leg = self.leg();
-        Homotopy::between(&self.chain, leg.from, leg.to)
+        Homotopy::of(&self.chain, self.mix().0)
     }
 
     /// The stage on screen, if it is exactly one.
     fn shown_stage(&self) -> Option<usize> {
-        let leg = self.leg();
-        match leg.weight {
-            0.0 => Some(leg.from),
-            1.0 => Some(leg.to),
-            _ => None,
-        }
+        self.mix().exact()
     }
 
     /// The grid is drawn as it is in the plane. A blend of 0 alone doesn't
     /// say so: from stage 3 on the homotopy starts from a mapped grid.
     fn unmapped(&self) -> bool {
-        self.peek || self.ends().unmapped(self.leg().weight)
+        self.peek || self.ends().unmapped()
     }
 
     /// Where the grid point `z` is drawn in the plane, as `g` in
@@ -481,7 +470,7 @@ impl Model {
         if self.peek {
             z
         } else {
-            self.ends().map(z, self.parameter, self.leg().weight)
+            self.ends().map(z, self.parameter)
         }
     }
 
@@ -490,7 +479,7 @@ impl Model {
         if self.peek {
             Complex::new(1.0, 0.0)
         } else {
-            self.ends().derivative(z, self.parameter, self.leg().weight)
+            self.ends().derivative(z, self.parameter)
         }
     }
 
@@ -519,7 +508,7 @@ impl Model {
         let jet = if self.peek {
             Function::identity().jet(source, p)
         } else {
-            self.ends().jet(source, p, self.leg().weight)
+            self.ends().jet(source, p)
         };
         let reach = self.half_view.length() as f64;
         Patch::new(source, jet, position, ppu, reach, &self.full_layout(), MAX_SEGMENTS)
@@ -1356,9 +1345,9 @@ fn stage_picker(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, &format!("from {} to {}", model.chain[start], model.chain[end]));
 
     ui.add_enabled_ui(end - start > 1, |ui| {
-        ui.horizontal(|ui| {
-            for (path, label) in [(Path::Stages, "Through stages"), (Path::Straight, "Straight line")] {
-                if ui.selectable_label(model.route.path == path, label).clicked() {
+        ui.horizontal_wrapped(|ui| {
+            for path in Path::ALL {
+                if ui.selectable_label(model.route.path == path, path.label()).clicked() {
                     model.set_path(path);
                 }
             }
@@ -1699,10 +1688,7 @@ fn key_pressed(app: &App, model: &mut Model, key: KeyCode) {
         KeyCode::KeyH | KeyCode::Home => model.reset_view(),
         KeyCode::KeyC => model.coloring = model.coloring.next(),
         KeyCode::KeyM => model.toggle_morph(),
-        KeyCode::KeyT => model.set_path(match model.route.path {
-            Path::Straight => Path::Stages,
-            Path::Stages => Path::Straight,
-        }),
+        KeyCode::KeyT => model.set_path(model.route.path.next()),
         KeyCode::Comma => model.move_selection(-1, shift),
         KeyCode::Period => model.move_selection(1, shift),
         _ => match STAGE_KEYS.iter().position(|&k| k == key) {
@@ -1877,7 +1863,7 @@ fn view(app: &App, model: &Model) {
     if segments == 0 {
         return;
     }
-    let leg = model.leg();
+    let [(stage_a, a), (stage_b, b), (stage_c, c)] = model.mix().0;
     let params = GridParams {
         parameter: gpu(model.parameter),
         offset: model.position.as_vec2(),
@@ -1888,10 +1874,9 @@ fn view(app: &App, model: &Model) {
         h_segments: layout.h_segments,
         v_segments: layout.v_segments,
         pixels_per_unit: model.pixels_per_unit as f32,
-        blend: model.blend() as f32,
         peek: model.peek as u32,
-        from_stage: leg.from as u32,
-        to_stage: leg.to as u32,
+        stages: uvec3(stage_a as u32, stage_b as u32, stage_c as u32),
+        weights: vec3(a as f32, b as f32, c as f32),
         color_stage: model.route.last as u32,
         line_width: LINE_WIDTH,
         coloring: model.coloring as u32,
@@ -2114,7 +2099,6 @@ impl MathText {
 fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
     let ppu = model.pixels_per_unit;
     let w = complex(cursor) / ppu - Complex::new(model.position.x, model.position.y);
-    let t = model.blend();
     let unmapped = model.unmapped();
     let (min, max) = model.domain();
     let (sources, count) = if unmapped {
@@ -2135,10 +2119,8 @@ fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
     text.math(
         &if unmapped {
             "z = ".to_owned()
-        } else if t == 1.0 {
-            format!("{}(z) = ", model.stage_name(model.leg().to))
-        } else if t == 0.0 {
-            format!("{}(z) = ", model.stage_name(model.leg().from))
+        } else if let Some(stage) = model.shown_stage() {
+            format!("{}(z) = ", model.stage_name(stage))
         } else {
             "w = ".to_owned()
         },
@@ -2146,7 +2128,7 @@ fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
     );
     let decimals = readout::decimals(ppu, magnitude(w));
     text.math(&readout::complex(w, decimals), strong);
-    if !unmapped && t != 0.0 && t != 1.0 {
+    if !unmapped && model.shown_stage().is_none() {
         text.words("   at ", weak);
         text.math(&format!("t = {:.2}", model.homotopy), weak);
     }
@@ -2338,8 +2320,8 @@ mod tests {
         let model = composition();
         assert_eq!(model.count(), 3);
         assert_eq!(selected(&model), (1, 3));
-        assert!(model.ends().start.is_identity());
-        assert_eq!(model.ends().end.to_string(), "sin(cos(p·z))");
+        assert_eq!(model.route.start(), 0);
+        assert_eq!(model.chain[model.route.last].to_string(), "sin(cos(p·z))");
     }
 
     #[test]
@@ -2347,8 +2329,8 @@ mod tests {
         let mut model = composition();
         model.pick(2);
         assert_eq!(selected(&model), (2, 2));
-        assert_eq!(model.ends().start.to_string(), "p·z");
-        assert_eq!(model.ends().end.to_string(), "cos(p·z)");
+        assert_eq!(model.chain[model.route.start()].to_string(), "p·z");
+        assert_eq!(model.chain[model.route.last].to_string(), "cos(p·z)");
         model.select_all();
         assert_eq!(selected(&model), (1, 3));
     }
@@ -2481,6 +2463,31 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_stages_keep_the_ends_of_the_selection_exact() {
+        let mut model = composition();
+        let (z, p) = (Complex::new(0.3, 0.7), model.parameter);
+        model.set_path(Path::Overlap);
+        model.homotopy = 1.0;
+        assert_eq!(model.map(z), model.chain[3].eval(z, p));
+        model.homotopy = 0.0;
+        assert!(model.unmapped());
+    }
+
+    #[test]
+    fn overlapping_stages_mix_three_functions() {
+        let mut model = composition();
+        let (z, p) = (Complex::new(0.3, 0.7), model.parameter);
+        model.set_path(Path::Overlap);
+        model.homotopy = model.route.position_of(2).unwrap();
+        let mixed: Complex<f64> = model.mix().0.iter()
+            .map(|&(stage, weight)| model.chain[stage].eval(z, p) * weight)
+            .sum();
+        assert_eq!(model.shown_stage(), None);
+        assert!((model.map(z) - mixed).norm() < 1e-12);
+        assert!(model.mix().0.iter().all(|part| part.1 > 0.0));
+    }
+
+    #[test]
     fn switching_paths_keeps_a_stage_on_screen() {
         let mut model = composition();
         model.homotopy = 1.0;
@@ -2517,7 +2524,7 @@ mod tests {
         assert_eq!(model.count(), 1);
         assert_eq!(selected(&model), (1, 1));
         assert_eq!(model.anchor, None);
-        assert_eq!(model.ends().end.to_string(), "z^2");
+        assert_eq!(model.chain[model.route.last].to_string(), "z^2");
     }
 
     #[test]
@@ -2528,7 +2535,7 @@ mod tests {
         model.set_formula("sin(".into());
         assert!(model.formula_error.is_some());
         assert_eq!(selected(&model), (1, 3));
-        assert_eq!(model.ends().end.to_string(), "sin(cos(p·z))");
+        assert_eq!(model.chain[model.route.last].to_string(), "sin(cos(p·z))");
         assert_eq!(model.new_function, None);
     }
 
@@ -2538,7 +2545,7 @@ mod tests {
         model.pick(3);
         model.set_example(5);
         assert_eq!(selected(&model), (1, 3));
-        assert!(model.ends().start.is_identity());
+        assert_eq!(model.route.start(), 0);
     }
 
     #[test]

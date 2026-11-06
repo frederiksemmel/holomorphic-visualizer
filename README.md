@@ -180,9 +180,14 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       `shift + ,` and `shift + .` move only its end. In the control window, a
       tap picks a stage and the next tap makes a range with it (or use shift),
       which also reaches stages past 9 and works on a phone.
-    * Through stages (`t` switches) plays each one in turn, from a smooth
-      partition of unity over them, so the motion comes to rest on every stage.
-      Straight line blends directly from one end of the selection to the other.
+    * Three ways to play a selection (`t` cycles them). Straight line blends
+      directly from one end to the other. Stage by stage plays each stage in
+      turn, finishing one before the next begins, so the motion comes to rest
+      on every stage and shows it exactly. Overlapping lets the stages run into
+      each other: the weights are a partition of unity of quadratic B-splines,
+      so they always add up to 1, the next stage is rising before the last has
+      finished, and evenly spaced stages go by at an even speed. Only the two
+      ends of the selection show exactly; on the way each stage peaks at 3/4.
     * Changing the selection keeps the picture when it can: going on to the
       next stage starts where the last one finished. Otherwise it shows
       finished, so scrubbing back reveals where it came from. If the animation

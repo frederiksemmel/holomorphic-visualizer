@@ -18,12 +18,11 @@ struct GridParams {
     h_segments: u32,
     v_segments: u32,
     pixels_per_unit: f32,
-    // 0 shows stage from_stage, 1 shows stage to_stage.
-    blend: f32,
     // Not 0: peeking at the source grid, which is z itself whatever the stage.
     peek: u32,
-    from_stage: u32,
-    to_stage: u32,
+    // What shows: up to three stages, with weights that add up to 1.
+    stages: vec3<u32>,
+    weights: vec3<f32>,
     // The stage that Stretch and Rotation color by: the end of the whole
     // selection, so that they stay the same from one section to the next.
     color_stage: u32,
@@ -62,13 +61,19 @@ struct GridParams {
 
 // ---------------------------------------------------------------------------
 
-// The map on screen: blends from one stage to the next.
+// The map on screen: the sum of the stages on show. Those with weight 0 are
+// left out, so that no stage counts where it blows up unless it shows.
 fn g(z: vec2<f32>) -> vec2<f32> {
     if params.peek != 0u {
         return z;
     }
-    let start = stage(params.from_stage, z, params.parameter);
-    return start + params.blend * (stage(params.to_stage, z, params.parameter) - start);
+    var sum = vec2(0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        if params.weights[i] != 0.0 {
+            sum += params.weights[i] * stage(params.stages[i], z, params.parameter);
+        }
+    }
+    return sum;
 }
 
 // The patch, on screen.
@@ -100,13 +105,18 @@ fn stage_prime(k: u32, z: vec2<f32>) -> vec2<f32> {
     return (stage(k, z + vec2(h, 0.0), p) - stage(k, z - vec2(h, 0.0), p)) / (2.0 * h);
 }
 
-// g'(z): g blends linearly, so its derivative does too.
+// g'(z): the weights are constants, so it is the same sum as g.
 fn g_prime(z: vec2<f32>) -> vec2<f32> {
     if params.peek != 0u {
         return ONE;
     }
-    let start = stage_prime(params.from_stage, z);
-    return start + params.blend * (stage_prime(params.to_stage, z) - start);
+    var sum = vec2(0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        if params.weights[i] != 0.0 {
+            sum += params.weights[i] * stage_prime(params.stages[i], z);
+        }
+    }
+    return sum;
 }
 
 // The grid line that segment i lies on, and where on it. Point j of the line,

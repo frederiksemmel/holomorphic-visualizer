@@ -135,8 +135,10 @@ impl Scene {
             Some((first, last)) => fields.push(format!("stages={first}-{last}")),
             None => {}
         }
-        if self.path == Path::Stages {
-            fields.push("path=stages".to_owned());
+        match self.path {
+            Path::Straight => {}
+            Path::Stages => fields.push("path=stages".to_owned()),
+            Path::Overlap => fields.push("path=overlap".to_owned()),
         }
         if let Some(t) = self.homotopy {
             fields.push(format!("t={}", number(t, 3)));
@@ -194,8 +196,10 @@ impl Scene {
                     scene.stages = first.parse().ok().zip(last.parse().ok());
                 }
                 "path" => {
-                    if value == "stages" {
-                        scene.path = Path::Stages;
+                    match value.as_str() {
+                        "stages" => scene.path = Path::Stages,
+                        "overlap" => scene.path = Path::Overlap,
+                        _ => {}
                     }
                 }
                 "t" => {
@@ -384,6 +388,13 @@ mod tests {
         // While it plays there is no t, and the link plays it too.
         let playing = Scene { homotopy: None, ..scene };
         assert_eq!(Scene::from_fragment(&playing.to_fragment()), playing);
+    }
+
+    #[test]
+    fn the_overlapping_path_round_trips() {
+        let scene = Scene { path: Path::Overlap, homotopy: Some(1.0), ..Scene::example(0) };
+        assert_eq!(scene.to_fragment(), "path=overlap&t=1");
+        assert_eq!(Scene::from_fragment("path=overlap&t=1"), scene);
     }
 
     #[test]

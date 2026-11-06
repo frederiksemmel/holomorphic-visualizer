@@ -225,14 +225,15 @@ mod tests {
     #[test]
     fn a_stage_blends_its_ends() {
         let chain = expr::parse("sin(cos(p*z))").unwrap().chain();
-        let ends = Homotopy::between(&chain, 1, 2);
-        let (source, t, ppu) = (Complex::new(0.7, 0.4), 0.3, 1e9);
-        let position = -ends.map(source, P, t);
-        let patch = Patch::new(source, ends.jet(source, P, t), position, ppu, REACH, &grid(), BUDGET)
+        let (source, ppu) = (Complex::new(0.7, 0.4), 1e9);
+        // As overlapping stages can be.
+        let ends = Homotopy::of(&chain, [(1, 0.25), (2, 0.5), (3, 0.25)]);
+        let position = -ends.map(source, P);
+        let patch = Patch::new(source, ends.jet(source, P), position, ppu, REACH, &grid(), BUDGET)
             .unwrap();
         let u = Complex::new(200.0, -350.0);
         let z = source + u * patch.units_per_u;
-        let exact = (ends.map(z, P, t) + position) * ppu;
+        let exact = (ends.map(z, P) + position) * ppu;
         assert!((at(&patch.cubic, u) - exact).norm() < 0.1);
     }
 }

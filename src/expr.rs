@@ -8,7 +8,7 @@
 //! so it agrees with what is drawn.
 //!
 //! The parse tree also says how a formula is composed: [`Function::stages`]
-//! takes it apart, and a [`Homotopy`] is the pair of functions on show.
+//! takes it apart, and a [`Homotopy`] is the functions on show.
 //!
 //! Syntax: numbers, `z`, `p`, `i`, `pi` (or `π`), `e`; `+ - * / ^` with the
 //! usual precedence (`^` binds tightest and to the right); parentheses; and the
@@ -243,52 +243,52 @@ pub fn function_wgsl(body: &str) -> String {
     format!("fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {{\n    return {body};\n}}\n")
 }
 
-/// The two functions a leg of the homotopy runs between: `start` at t = 0,
-/// `end` at t = 1. Everything on the CPU that draws or inverts the map works
-/// from this pair, so that nothing takes the start for the identity.
+/// What shows at some point of the homotopy: functions with their weights,
+/// `crate::route::Mix` for a [`Function::chain`]. Everything on the CPU that
+/// draws or inverts the map works from this, as `g` in `src/grid.wgsl` does.
+/// Functions with weight 0 are left out, so that at the ends of the homotopy
+/// there is only what shows, even where the other blows up.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Homotopy<'a> {
-    pub start: &'a Function,
-    pub end: &'a Function,
-}
+pub struct Homotopy<'a>([(&'a Function, f64); 3]);
 
 impl<'a> Homotopy<'a> {
-    /// From stage `from` to stage `to` of a [`Function::chain`].
-    pub fn between(chain: &'a [Function], from: usize, to: usize) -> Homotopy<'a> {
-        Homotopy { start: &chain[from], end: &chain[to] }
+    /// The stages of `chain` with these weights.
+    pub fn of(chain: &'a [Function], parts: [(usize, f64); 3]) -> Homotopy<'a> {
+        Homotopy(parts.map(|(stage, weight)| (&chain[stage], weight)))
     }
 
-    /// At blend `t` the grid is where it started: every point is at z itself.
-    pub fn unmapped(&self, t: f64) -> bool {
-        self.start.is_identity() && (t == 0.0 || self.end.is_identity())
+    /// `t` of the way from stage `from` to stage `to`.
+    pub fn between(chain: &'a [Function], from: usize, to: usize, t: f64) -> Homotopy<'a> {
+        Homotopy::of(chain, [(from, 1.0 - t), (to, t), (to, 0.0)])
     }
 
-    /// Where the grid point `z` is at blend `t`: h(z) = s(z) + t·(e(z) − s(z)),
-    /// as `g` in `src/grid.wgsl` computes it, for the start s and end e. At
-    /// t = 0 it is s(z) exactly, even where e blows up.
-    pub fn map(&self, z: Complex<f64>, p: Complex<f64>, t: f64) -> Complex<f64> {
-        let start = self.start.eval(z, p);
-        if t == 0.0 {
-            start
-        } else {
-            start + t * (self.end.eval(z, p) - start)
-        }
+    fn parts(&self) -> impl Iterator<Item = (&'a Function, f64)> {
+        self.0.into_iter().filter(|&(_, weight)| weight != 0.0)
     }
 
-    /// h'(z) = s'(z) + t·(e'(z) − s'(z)).
-    pub fn derivative(&self, z: Complex<f64>, p: Complex<f64>, t: f64) -> Complex<f64> {
-        let start = self.start.derivative(z, p);
-        if t == 0.0 {
-            start
-        } else {
-            start + t * (self.end.derivative(z, p) - start)
-        }
+    /// The grid is where it started: every point is at z itself.
+    pub fn unmapped(&self) -> bool {
+        self.parts().all(|(function, _)| function.is_identity())
+    }
+
+    /// Where the grid point `z` is: the sum of what each function makes of it.
+    pub fn map(&self, z: Complex<f64>, p: Complex<f64>) -> Complex<f64> {
+        self.parts().map(|(function, weight)| function.eval(z, p) * weight).sum()
+    }
+
+    /// The weights are constants, so the derivative is the same sum.
+    pub fn derivative(&self, z: Complex<f64>, p: Complex<f64>) -> Complex<f64> {
+        self.parts().map(|(function, weight)| function.derivative(z, p) * weight).sum()
     }
 
     /// The Taylor series of [`Homotopy::map`] around `z`.
-    pub fn jet(&self, z: Complex<f64>, p: Complex<f64>, t: f64) -> Jet {
-        let (start, end) = (self.start.jet(z, p), self.end.jet(z, p));
-        std::array::from_fn(|k| start[k] + t * (end[k] - start[k]))
+    pub fn jet(&self, z: Complex<f64>, p: Complex<f64>) -> Jet {
+        let mut sum = [Complex::new(0.0, 0.0); 4];
+        for (function, weight) in self.parts() {
+            let jet = function.jet(z, p);
+            sum = std::array::from_fn(|k| sum[k] + jet[k] * weight);
+        }
+        sum
     }
 }
 
@@ -1036,37 +1036,32 @@ mod tests {
         assert_eq!(text("2pi"), "2·π");
     }
 
-    fn homotopy(formula: &str, from: usize, to: usize) -> Homotopy<'static> {
+    fn homotopy(formula: &str, from: usize, to: usize, t: f64) -> Homotopy<'static> {
         let chain = parse(formula).unwrap().chain();
-        Homotopy::between(Box::leak(chain.into_boxed_slice()), from, to)
+        Homotopy::between(Box::leak(chain.into_boxed_slice()), from, to, t)
     }
 
     #[test]
     fn the_chain_is_the_identity_then_the_stages() {
         let chain: Vec<String> = parse("sin(cos(p*z))").unwrap().chain().iter().map(Function::to_string).collect();
         assert_eq!(chain, ["z", "p·z", "cos(p·z)", "sin(cos(p·z))"]);
-        let start_and_end = |from, to| {
-            let Homotopy { start, end } = homotopy("sin(cos(p*z))", from, to);
-            (start.to_string(), end.to_string())
-        };
-        assert_eq!(start_and_end(1, 3), ("p·z".into(), "sin(cos(p·z))".into()));
     }
 
     #[test]
     fn the_map_runs_between_the_two_ends() {
         let p = Complex::new(0.5, -2.0);
         let z = Complex::new(0.3, 0.7);
-        let ends = homotopy("sin(cos(p*z))", 1, 2);
+        let ends = |t| homotopy("sin(cos(p*z))", 1, 2, t);
         let (start, end) = (p * z, (p * z).cos());
-        assert_close(ends.map(z, p, 0.0), start, "t = 0");
-        assert_close(ends.map(z, p, 1.0), end, "t = 1");
-        assert_close(ends.map(z, p, 0.25), start + 0.25 * (end - start), "t = 1/4");
+        assert_close(ends(0.0).map(z, p), start, "t = 0");
+        assert_close(ends(1.0).map(z, p), end, "t = 1");
+        assert_close(ends(0.25).map(z, p), start + 0.25 * (end - start), "t = 1/4");
 
         let (start, end) = (p, -p * (p * z).sin());
         let close = |a: Complex<f64>, b: Complex<f64>| (a - b).norm() <= 1e-3 * b.norm().max(1.0);
-        assert!(close(ends.derivative(z, p, 0.0), start));
-        assert!(close(ends.derivative(z, p, 1.0), end));
-        assert!(close(ends.derivative(z, p, 0.25), start + 0.25 * (end - start)));
+        assert!(close(ends(0.0).derivative(z, p), start));
+        assert!(close(ends(1.0).derivative(z, p), end));
+        assert!(close(ends(0.25).derivative(z, p), start + 0.25 * (end - start)));
     }
 
     #[test]
@@ -1074,30 +1069,27 @@ mod tests {
         let p = Complex::new(0.5, -2.0);
         let z = Complex::new(0.3, 0.7);
         let f = parse("exp(p * z)").unwrap();
-        let ends = homotopy("exp(p * z)", 0, 2);
+        let ends = |t| homotopy("exp(p * z)", 0, 2, t);
         let one = Complex::new(1.0, 0.0);
         for t in [0.25, 0.5, 1.0] {
-            assert_eq!(ends.map(z, p, t), z + t * (f.eval(z, p) - z));
-            assert_eq!(
-                ends.derivative(z, p, t),
-                one + t * (f.derivative(z, p) - one)
-            );
+            assert_close(ends(t).map(z, p), z + t * (f.eval(z, p) - z), "the map");
+            assert_close(ends(t).derivative(z, p), one + t * (f.derivative(z, p) - one), "h'");
         }
         // At the identity it is z exactly, even where f blows up.
         let pole = Complex::new(0.0, 0.0);
-        assert_eq!(homotopy("1/z", 0, 1).map(pole, p, 0.0), pole);
-        assert_eq!(homotopy("1/z", 0, 1).derivative(pole, p, 0.0), one);
+        assert_eq!(homotopy("1/z", 0, 1, 0.0).map(pole, p), pole);
+        assert_eq!(homotopy("1/z", 0, 1, 0.0).derivative(pole, p), one);
     }
 
     #[test]
     fn only_the_identity_leaves_the_grid_unmapped() {
-        let unmapped = |from, to, t| homotopy("sin(cos(p*z))", from, to).unmapped(t);
+        let unmapped = |from, to, t| homotopy("sin(cos(p*z))", from, to, t).unmapped();
         assert!(unmapped(0, 3, 0.0) && !unmapped(0, 3, 0.5) && !unmapped(0, 3, 1.0));
         assert!(unmapped(0, 1, 0.0) && !unmapped(0, 1, 0.5));
         // Past the identity even t = 0 is mapped.
         assert!(!unmapped(1, 2, 0.0) && !unmapped(2, 3, 0.0));
         // The identity itself stays put all the way.
-        assert!(homotopy("z", 0, 1).unmapped(1.0));
+        assert!(homotopy("z", 0, 1, 1.0).unmapped());
     }
 
     #[test]
