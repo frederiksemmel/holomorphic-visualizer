@@ -102,6 +102,11 @@ build-web    # build the browser version into web/dist
 serve-web    # build it and serve it on http://127.0.0.1:8080
 ```
 
+To try changes in the browser, run `devenv up`. It rebuilds the fast `web-dev`
+profile whenever a source file changes and serves it through Tailscale funnel
+on https://beast.cuscus-exponential.ts.net:10000/ until you stop it. Reload the
+page once `web-build` has finished.
+
 The release build optimizes the whole program as one unit and then runs
 wasm-opt, which takes minutes even after a small change. For trying it out,
 `WEB_PROFILE=web-dev` (in nushell: `with-env {WEB_PROFILE: web-dev} { serve-web }`)
