@@ -36,6 +36,8 @@ wasm-bindgen = "0.2"
 [dev-dependencies]
 # Checks in tests that generated shader code compiles. Same version as wgpu uses.
 naga = { version = "29", features = ["wgsl-in"] }
+# Writes the app icons (examples/icon.rs).
+png = "0.18"
 
 [profile.dev]
 # Bevy is slow unoptimized; keep debug builds usable.

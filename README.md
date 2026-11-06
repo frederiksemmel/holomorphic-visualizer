@@ -117,6 +117,9 @@ WebGPU needs a secure context, so a phone on the same Wi-Fi gets the fallback
 page from `http://<laptop>:8080`. With Tailscale on both, `tailscale serve --bg
 8080` serves it over HTTPS on the tailnet.
 
+The app icons in `web/icons` are z³ from the Power example, drawn by
+`examples/icon.rs`. `web/icons/render.sh` redraws them.
+
 CI (`.github/workflows/web.yml`) builds it for every pull request and publishes
 it to GitHub Pages from `master`. nannou is vendored in `vendor/nannou` with
 fixes for the web build; see the note in `Cargo.toml`.

@@ -18,7 +18,7 @@ if [ "$profile" = web ] && command -v wasm-opt >/dev/null; then
   # Features come from the target_features section that rustc emits.
   wasm-opt -Oz --strip-debug --strip-producers -o "$out/app_bg.wasm" "$out/app_bg.wasm"
 fi
-cp web/index.html web/preview.gif web/social.png "$out/"
+cp web/index.html web/manifest.webmanifest web/preview.gif web/social.png web/icons/*.png "$out/"
 # The loading screen measures its progress against the unpacked size.
 sed -i "s/data-wasm-size=\"\"/data-wasm-size=\"$(stat -c %s "$out/app_bg.wasm")\"/" "$out/index.html"
 du -h "$out"/*

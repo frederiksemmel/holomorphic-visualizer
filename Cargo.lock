@@ -2069,6 +2069,7 @@ dependencies = [
  "naga",
  "nannou",
  "num",
+ "png",
  "wasm-bindgen",
  "web-sys",
 ]

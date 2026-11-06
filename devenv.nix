@@ -106,7 +106,8 @@ in
     cd "$DEVENV_ROOT"
     WEB_PROFILE=web-dev exec watchexec --on-busy-update queue \
       --watch src --watch assets --watch vendor \
-      --watch web/index.html --watch web/build.sh \
+      --watch web/index.html --watch web/manifest.webmanifest \
+      --watch web/icons --watch web/build.sh \
       --watch Cargo.toml --watch Cargo.lock \
       -- web/build.sh
   '';
