@@ -7,6 +7,9 @@
 //! border is under the cursor); it mirrors those helpers, branch cuts included,
 //! so it agrees with what is drawn.
 //!
+//! The parse tree also says how a formula is composed: [`Function::stages`]
+//! takes it apart, and a [`Homotopy`] is the pair of functions on show.
+//!
 //! Syntax: numbers, `z`, `p`, `i`, `pi` (or `π`), `e`; `+ - * / ^` with the
 //! usual precedence (`^` binds tightest and to the right); parentheses; and the
 //! functions in [`FUNCTIONS`], called with parentheses. Juxtaposition
@@ -86,6 +89,33 @@ pub fn parse(formula: &str) -> Result<Function, ParseError> {
 pub struct Function(Expr);
 
 impl Function {
+    pub fn is_identity(&self) -> bool {
+        self.0 == Expr::Z
+    }
+
+    /// The compositional parts of f, innermost first: the identity, then what
+    /// each layer around z makes of the one before, up to f itself.
+    ///
+    /// Walking down from the root, a node with exactly one operand that
+    /// depends on z is a layer, and the walk goes on into that operand; the
+    /// other operand (a constant, p) belongs to the layer, so `p * z` is one
+    /// stage. A node with several such operands can't be undone one step at a
+    /// time, so it stays a single stage: exp(z + 1/z) is z, z + 1/z, exp(z + 1/z).
+    pub fn stages(&self) -> Vec<Function> {
+        let mut stages = vec![self.clone()];
+        let mut node = &self.0;
+        while *node != Expr::Z {
+            let mut inner = node.operands().into_iter().filter(|a| a.depends_on_z());
+            node = match (inner.next(), inner.next()) {
+                (Some(only), None) => only,
+                _ => &Expr::Z,
+            };
+            stages.push(Function(node.clone()));
+        }
+        stages.reverse();
+        stages
+    }
+
     /// A WGSL expression in `z` and `p`, both `vec2<f32>`.
     pub fn to_wgsl(&self) -> String {
         self.0.to_wgsl()
@@ -100,14 +130,91 @@ impl Function {
     /// `src/grid.wgsl` uses: large enough that f32 rounding in f doesn't
     /// swamp the difference, and relative to |z| so it stays so far out.
     pub fn derivative(&self, z: Complex<f32>, p: Complex<f32>) -> Complex<f32> {
+        if self.is_identity() {
+            return Complex::new(1.0, 0.0);
+        }
         let h = 1e-3 * z.norm().max(1.0);
         (self.eval(z + h, p) - self.eval(z - h, p)) / (2.0 * h)
+    }
+}
+
+/// Renders the formula back to text the parser reads as the same tree, with
+/// `·` for `*` and only the parentheses it needs: `cos(p·z)`.
+impl fmt::Display for Function {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
 /// The WGSL definition of `f` with `body` as its value.
 pub fn function_wgsl(body: &str) -> String {
     format!("fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {{\n    return {body};\n}}\n")
+}
+
+/// The two functions the homotopy runs between: `start` at t = 0, `end` at
+/// t = 1. Everything that draws or inverts the map works from this pair, so
+/// that nothing takes the start for the identity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Homotopy {
+    pub start: Function,
+    pub end: Function,
+}
+
+impl Homotopy {
+    /// Stage `stage` of [`Function::stages`], counted from 1 as the keys do:
+    /// the stage before it into this one. Stage 1 has none before it, so it
+    /// stays the identity. Stage 0 is the whole function, from the identity to
+    /// the last stage. `None` if there is no such stage.
+    pub fn of_stage(stages: &[Function], stage: usize) -> Option<Homotopy> {
+        let end = match stage {
+            0 => stages.last()?,
+            k => stages.get(k - 1)?,
+        };
+        Some(Homotopy {
+            start: stages[stage.saturating_sub(2)].clone(),
+            end: end.clone(),
+        })
+    }
+
+    /// At blend `t` the grid is where it started: every point is at z itself.
+    pub fn unmapped(&self, t: f32) -> bool {
+        self.start.is_identity() && (t == 0.0 || self.end.is_identity())
+    }
+
+    /// Where the grid point `z` is at blend `t`: h(z) = s(z) + t·(e(z) − s(z)),
+    /// as `g` in `src/grid.wgsl` computes it, for the start s and end e. At
+    /// t = 0 it is s(z) exactly, even where e blows up.
+    pub fn map(&self, z: Complex<f32>, p: Complex<f32>, t: f32) -> Complex<f32> {
+        let start = self.start.eval(z, p);
+        if t == 0.0 {
+            start
+        } else {
+            start + t * (self.end.eval(z, p) - start)
+        }
+    }
+
+    /// h'(z) = s'(z) + t·(e'(z) − s'(z)).
+    pub fn derivative(&self, z: Complex<f32>, p: Complex<f32>, t: f32) -> Complex<f32> {
+        let start = self.start.derivative(z, p);
+        if t == 0.0 {
+            start
+        } else {
+            start + t * (self.end.derivative(z, p) - start)
+        }
+    }
+
+    /// The WGSL definitions `src/grid.wgsl` needs: `f` for the end, `f_start`
+    /// for the start, and whether that is the identity, whose derivative is
+    /// then exact instead of a finite difference.
+    pub fn to_wgsl(&self) -> String {
+        format!(
+            "{}fn f_start(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {{\n    return {};\n}}\n\
+             const START_IS_IDENTITY: bool = {};\n",
+            function_wgsl(&self.end.to_wgsl()),
+            self.start.to_wgsl(),
+            self.start.is_identity(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -236,7 +343,66 @@ enum Expr {
     Call(&'static str, Box<Expr>),
 }
 
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Parenthesized if it binds looser than the grammar allows here.
+        let operand = |a: &Expr, at_least: u8| {
+            if a.precedence() < at_least {
+                format!("({a})")
+            } else {
+                a.to_string()
+            }
+        };
+        match self {
+            Expr::Number(n) if *n == std::f32::consts::PI => write!(f, "π"),
+            Expr::Number(n) if *n == std::f32::consts::E => write!(f, "e"),
+            Expr::Number(n) => write!(f, "{n}"),
+            Expr::Z => write!(f, "z"),
+            Expr::P => write!(f, "p"),
+            Expr::I => write!(f, "i"),
+            Expr::Neg(a) => write!(f, "-{}", operand(a, 3)),
+            Expr::Add(a, b) => write!(f, "{} + {}", operand(a, 1), operand(b, 2)),
+            Expr::Sub(a, b) => write!(f, "{} - {}", operand(a, 1), operand(b, 2)),
+            Expr::Mul(a, b) => write!(f, "{}·{}", operand(a, 2), operand(b, 3)),
+            Expr::Div(a, b) => write!(f, "{}/{}", operand(a, 2), operand(b, 3)),
+            Expr::Pow(a, b) => write!(f, "{}^{}", operand(a, 5), operand(b, 3)),
+            Expr::Call(helper, a) => {
+                let name = FUNCTIONS.iter().find(|(_, h)| h == helper);
+                write!(f, "{}({a})", name.map_or(*helper, |(name, _)| name))
+            }
+        }
+    }
+}
+
 impl Expr {
+    /// How tightly the outermost operator binds, by the rules of [`Parser`]:
+    /// sums, then products, then signs, powers, and atoms.
+    fn precedence(&self) -> u8 {
+        match self {
+            Expr::Add(..) | Expr::Sub(..) => 1,
+            Expr::Mul(..) | Expr::Div(..) => 2,
+            Expr::Neg(_) => 3,
+            Expr::Pow(..) => 4,
+            _ => 5,
+        }
+    }
+
+    fn operands(&self) -> Vec<&Expr> {
+        match self {
+            Expr::Number(_) | Expr::Z | Expr::P | Expr::I => Vec::new(),
+            Expr::Neg(a) | Expr::Call(_, a) => vec![a],
+            Expr::Add(a, b)
+            | Expr::Sub(a, b)
+            | Expr::Mul(a, b)
+            | Expr::Div(a, b)
+            | Expr::Pow(a, b) => vec![a, b],
+        }
+    }
+
+    fn depends_on_z(&self) -> bool {
+        *self == Expr::Z || self.operands().iter().any(|a| a.depends_on_z())
+    }
+
     fn to_wgsl(&self) -> String {
         match self {
             // `{:?}` always writes a decimal point or exponent, so WGSL reads a float.
@@ -539,6 +705,7 @@ fn unknown_name(name: &str, called: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::examples::EXAMPLES;
 
     /// Checks that `wgsl` (the body of `f`) compiles, together with the helpers.
     fn validate(body: &str) {
@@ -567,6 +734,228 @@ mod tests {
             let body = to_wgsl(formula).unwrap_or_else(|e| panic!("{formula}: {e}"));
             validate(&body);
         }
+    }
+
+    /// The stages of `formula`, as text.
+    fn stages(formula: &str) -> Vec<String> {
+        let stages = parse(formula).unwrap().stages();
+        stages.iter().map(Function::to_string).collect()
+    }
+
+    #[test]
+    fn stages_of_the_examples() {
+        let expected: [(&str, &[&str]); 6] = [
+            ("exp", &["z", "p·z", "exp(p·z)"]),
+            // Both sides of the division depend on z.
+            ("mobius", &["z", "p·(1 - z)/(1 + z)"]),
+            ("power", &["z", "z^p"]),
+            ("sine", &["z", "sin(z)", "p·sin(z)"]),
+            ("joukowski", &["z", "z + p/z"]),
+            (
+                "escher",
+                &[
+                    "z",
+                    "2·π·i·z",
+                    "2·π·i·z/(2·π·i + log(p·e^6))",
+                    "exp(2·π·i·z/(2·π·i + log(p·e^6)))",
+                ],
+            ),
+        ];
+        assert_eq!(expected.len(), EXAMPLES.len());
+        for (slug, expected) in expected {
+            let example = EXAMPLES.iter().find(|e| e.slug == slug).unwrap();
+            assert_eq!(stages(example.formula), expected, "{slug}");
+        }
+    }
+
+    #[test]
+    fn a_composition_comes_apart_layer_by_layer() {
+        assert_eq!(
+            stages("sin(cos(p*z))"),
+            ["z", "p·z", "cos(p·z)", "sin(cos(p·z))"]
+        );
+        assert_eq!(stages("-exp(z)^2"), ["z", "exp(z)", "exp(z)^2", "-exp(z)^2"]);
+        assert_eq!(stages("2^z"), ["z", "2^z"]);
+        // By the shape of the tree: `2 * z * p` is (2 * z) * p.
+        assert_eq!(stages("2 * z * p"), ["z", "2·z", "2·z·p"]);
+        assert_eq!(stages("2 * p * z"), ["z", "2·p·z"]);
+    }
+
+    #[test]
+    fn several_operands_with_z_make_one_stage() {
+        assert_eq!(stages("exp(z + 1/z)"), ["z", "z + 1/z", "exp(z + 1/z)"]);
+        assert_eq!(stages("z * z"), ["z", "z·z"]);
+        assert_eq!(stages("z^z"), ["z", "z^z"]);
+        assert_eq!(stages("sin(z)cos(z)"), ["z", "sin(z)·cos(z)"]);
+        // Only the walk from the root counts: what is inside stays whole.
+        assert_eq!(
+            stages("log(1 + z^2 + exp(z))"),
+            ["z", "1 + z^2 + exp(z)", "log(1 + z^2 + exp(z))"]
+        );
+    }
+
+    #[test]
+    fn stages_start_at_the_identity_and_end_at_the_formula() {
+        let formulas = EXAMPLES.iter().map(|example| example.formula);
+        let typed = ["z", "p", "2", "i", "sin(cos(p*z))", "-z", "z + 1", "1/z", "exp(exp(z))"];
+        for formula in formulas.chain(typed) {
+            let function = parse(formula).unwrap();
+            let stages = function.stages();
+            assert!(stages[0].is_identity(), "{formula}");
+            assert_eq!(stages.last(), Some(&function), "{formula}");
+            // No stage twice.
+            for pair in stages.windows(2) {
+                assert_ne!(pair[0], pair[1], "{formula}");
+            }
+        }
+        // Without z the formula is one stage after the identity; z alone is just that.
+        assert_eq!(stages("p + 1"), ["z", "p + 1"]);
+        assert_eq!(stages("z"), ["z"]);
+    }
+
+    #[test]
+    fn long_chains_are_many_stages_and_stay_in_order() {
+        assert_eq!(stages("z + 1 + 2 + 3").len(), 4);
+        let nested = format!("{}z{}", "sin(".repeat(11), ")".repeat(11));
+        let all = stages(&nested);
+        assert_eq!(all.len(), 12);
+        assert_eq!(all[1], "sin(z)");
+        assert_eq!(all[11], nested);
+    }
+
+    #[test]
+    fn text_reads_back_as_the_same_function() {
+        let formulas = [
+            "1 - (2 - z)",
+            "1 - 2 - z",
+            "1 / (2 / z)",
+            "1 / 2 / z",
+            "1 / (2 * z)",
+            "(1 + z) * (2 - z)",
+            "(z^2)^3",
+            "z^2^3",
+            "z^(1/2)",
+            "z^-2",
+            "z^-(2 + p)",
+            "(-z)^2",
+            "-z^2",
+            "-(z + 1)",
+            "-(z * 2)",
+            "- -z",
+            "2 * -z",
+            "z - -1",
+            "(-2) * z",
+            "e^(i pi z)",
+            "2e3 z + 1e-3 + 0.1",
+            "ln(z) + sqrt(z) + tan(z) - tanh(z)",
+            "(p + 1)(z - 1)",
+            "1.5 π",
+        ];
+        for formula in formulas {
+            let function = parse(formula).unwrap();
+            let text = function.to_string();
+            assert_eq!(parse(&text), Ok(function), "{formula} became {text}");
+        }
+        for example in &EXAMPLES {
+            for stage in parse(example.formula).unwrap().stages() {
+                assert_eq!(parse(&stage.to_string()), Ok(stage));
+            }
+        }
+    }
+
+    #[test]
+    fn text_has_only_the_parentheses_it_needs() {
+        let text = |formula: &str| parse(formula).unwrap().to_string();
+        assert_eq!(text("((z)) + (1)"), "z + 1");
+        assert_eq!(text("(p * z) + (1 / z)"), "p·z + 1/z");
+        assert_eq!(text("1 - (2 + z)"), "1 - (2 + z)");
+        assert_eq!(text("p (1 + z)"), "p·(1 + z)");
+        assert_eq!(text("ln(z)"), "log(z)");
+        assert_eq!(text("2pi"), "2·π");
+    }
+
+    fn homotopy(formula: &str, stage: usize) -> Homotopy {
+        Homotopy::of_stage(&parse(formula).unwrap().stages(), stage).unwrap()
+    }
+
+    #[test]
+    fn each_stage_runs_from_the_stage_before() {
+        let formula = "sin(cos(p*z))";
+        let ends = |stage| {
+            let Homotopy { start, end } = homotopy(formula, stage);
+            (start.to_string(), end.to_string())
+        };
+        assert_eq!(ends(0), ("z".into(), "sin(cos(p·z))".into()));
+        assert_eq!(ends(1), ("z".into(), "z".into()));
+        assert_eq!(ends(2), ("z".into(), "p·z".into()));
+        assert_eq!(ends(3), ("p·z".into(), "cos(p·z)".into()));
+        assert_eq!(ends(4), ("cos(p·z)".into(), "sin(cos(p·z))".into()));
+        let stages = parse(formula).unwrap().stages();
+        assert_eq!(Homotopy::of_stage(&stages, 5), None);
+    }
+
+    #[test]
+    fn the_map_runs_between_the_two_ends() {
+        let p = Complex::new(0.5, -2.0);
+        let z = Complex::new(0.3, 0.7);
+        let ends = homotopy("sin(cos(p*z))", 3);
+        let (start, end) = (p * z, (p * z).cos());
+        assert_close(ends.map(z, p, 0.0), start, "t = 0");
+        assert_close(ends.map(z, p, 1.0), end, "t = 1");
+        assert_close(ends.map(z, p, 0.25), start + 0.25 * (end - start), "t = 1/4");
+
+        let (start, end) = (p, -p * (p * z).sin());
+        let close = |a: Complex<f32>, b: Complex<f32>| (a - b).norm() <= 1e-3 * b.norm().max(1.0);
+        assert!(close(ends.derivative(z, p, 0.0), start));
+        assert!(close(ends.derivative(z, p, 1.0), end));
+        assert!(close(ends.derivative(z, p, 0.25), start + 0.25 * (end - start)));
+    }
+
+    #[test]
+    fn the_whole_function_blends_as_it_always_did() {
+        let p = Complex::new(0.5, -2.0);
+        let z = Complex::new(0.3, 0.7);
+        let f = parse("exp(p * z)").unwrap();
+        let ends = homotopy("exp(p * z)", 0);
+        let one = Complex::new(1.0, 0.0);
+        for t in [0.25, 0.5, 1.0] {
+            assert_eq!(ends.map(z, p, t), z + t * (f.eval(z, p) - z));
+            assert_eq!(
+                ends.derivative(z, p, t),
+                one + t * (f.derivative(z, p) - one)
+            );
+        }
+        // At the identity it is z exactly, even where f blows up.
+        let pole = Complex::new(0.0, 0.0);
+        assert_eq!(homotopy("1/z", 0).map(pole, p, 0.0), pole);
+        assert_eq!(homotopy("1/z", 0).derivative(pole, p, 0.0), one);
+    }
+
+    #[test]
+    fn only_the_identity_leaves_the_grid_unmapped() {
+        let unmapped = |stage, t| homotopy("sin(cos(p*z))", stage).unmapped(t);
+        assert!(unmapped(0, 0.0) && !unmapped(0, 0.5) && !unmapped(0, 1.0));
+        // Stage 1 is the identity all the way.
+        assert!(unmapped(1, 0.0) && unmapped(1, 0.5) && unmapped(1, 1.0));
+        assert!(unmapped(2, 0.0) && !unmapped(2, 0.5));
+        // From stage 3 on even t = 0 is mapped.
+        assert!(!unmapped(3, 0.0) && !unmapped(4, 0.0));
+    }
+
+    #[test]
+    fn the_identity_has_an_exact_derivative() {
+        let z = Complex::new(1234.5, -987.6);
+        assert_eq!(parse("z").unwrap().derivative(z, z), Complex::new(1.0, 0.0));
+    }
+
+    #[test]
+    fn the_shader_learns_where_the_homotopy_starts() {
+        let wgsl = homotopy("sin(cos(p*z))", 3).to_wgsl();
+        assert!(wgsl.contains("return cmul(p, z);"), "{wgsl}");
+        assert!(wgsl.contains("return ccos(cmul(p, z));"), "{wgsl}");
+        assert!(wgsl.contains("START_IS_IDENTITY: bool = false"), "{wgsl}");
+        assert!(homotopy("sin(z)", 0).to_wgsl().contains("START_IS_IDENTITY: bool = true"));
+        assert!(homotopy("sin(z)", 2).to_wgsl().contains("START_IS_IDENTITY: bool = true"));
     }
 
     #[test]

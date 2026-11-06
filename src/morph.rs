@@ -1,12 +1,13 @@
 //! The animation that plays when the visualizer opens: the grid bends from
-//! the identity to `f` and back, again and again, until the user takes over
-//! the homotopy.
+//! the start of the homotopy to its end and back, again and again, until the
+//! user takes over. That is the identity to `f`, or when only one stage of
+//! `f` shows, the stage before to that one.
 
 use std::f32::consts::PI;
 
 /// Seconds the source grid shows before it starts to bend.
 const HOLD_SOURCE: f32 = 0.75;
-/// Seconds to bend from the identity to `f`, and the same back.
+/// Seconds to bend from the start of the homotopy to its end, and the same back.
 const BEND: f32 = 3.0;
 /// Seconds the image of the grid shows before it bends back.
 const HOLD_IMAGE: f32 = 2.0;

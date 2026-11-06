@@ -7,7 +7,8 @@
 Type any complex function f(z) and watch it bend a grid of the plane, live on
 the GPU, in the spirit of 3Blue1Brown's animations. Slide from the identity to
 f, drag the parameter p around, and color the lines by where they came from,
-by how much f stretches them, or by how far it turns them.
+by how much f stretches them, or by how far it turns them. Take a composition
+like sin(cos(p · z)) apart and watch it built up one layer at a time.
 
 The URL always holds what you're looking at, so you can share a view by
 sharing the link (there's also a **Copy link** button). For example:
@@ -24,7 +25,7 @@ the [desktop app](#development).
 Pick one from the **Example** menu in the control window, or press `e` to step
 through them. Each brings its own grid and parameter, and fills in its formula,
 which you can then edit (see [Usage](#usage)). The screenshots use the
-default Phase coloring (`3`): every point keeps the hue of its angle arg z in
+default Phase coloring: every point keeps the hue of its angle arg z in
 the source grid, so you can see where each direction went.
 
 A Möbius transformation, p · (1 − z)/(1 + z), maps lines and circles to lines
@@ -152,12 +153,33 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
   the formula and translates it into WGSL (`p sin(z)` becomes
   `cmul(p, csin(z))`), and the app rebuilds the grid shader from
   `src/grid.wgsl`, the complex helpers in `src/complex.wgsl` and the generated
-  `f`, which Bevy recompiles. Only formulas that parse are sent to the GPU,
+  `f` (with the stage before it, for a stage), which Bevy recompiles. Only
+  formulas that parse are sent to the GPU,
   and the tests compile the code generated for a range of formulas with naga.
   The CPU evaluates the same parse tree, with the same branch cuts, only for
   the few points the mouse needs, such as which grid border is under it or
   what landed under the cursor.
-* Color modes (`c` cycles them, `1`–`5` pick one):
+* Stages take a function apart into the steps it is composed of. The app reads
+  them off the formula: `sin(cos(p * z))` has the stages `z`, `p·z`,
+  `cos(p·z)` and `sin(cos(p·z))`. Keys `1` to `9` pick a stage and `0` goes back
+  to the full function. The control window has a button for each, showing its
+  formula, which also reaches stages past 9 and works on a phone.
+    * Stage k shows its own step: the homotopy blends stage k − 1 into stage k.
+      Picking a stage shows it finished, so scrubbing back reveals where it
+      came from and Animate plays that step alone; if the animation is
+      already playing, it goes on from the start of the new stage. Stage 1 is
+      the identity, so there is nothing to blend. In the full function the
+      homotopy goes from the identity to f, start to finish.
+    * The formula is walked from the outside in, for as long as exactly one
+      operand of a step depends on z. Constants and `p` belong to their step,
+      so `p * z` is one stage. When several operands depend on z, that step
+      stays one stage: `exp(z + 1/z)` has the stages `z`, `z + 1/z` and
+      `exp(z + 1/z)`, and the Möbius example has just two.
+    * The hover readout (`g3(z)` is stage 3), the colors and the mouse all
+      follow the stage. Stretch and Rotation show the composition up to the
+      stage, not its last step alone. Editing the formula or picking an example
+      goes back to the full function.
+* Color modes (`c` cycles them, or pick one in the control window):
     * **White**: plain lines.
     * **Source**: horizontal lines warm, vertical lines cool, shaded by
       position, so you can follow each line of the grid to its image.
@@ -205,15 +227,16 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       the parameter `p`; `r` resets it to the example's value. Dragging it on
       its pad in the panel or with the right button, `shift` moves it 5×
       finer
-    * blend from the identity to `f` (the homotopy) with `←` / `→`,
-      `space + scroll`, or holding `f` and scrolling or moving
-      the mouse
+    * blend from the identity to `f`, or through a stage (the homotopy), with
+      `←` / `→`, `space + scroll`, or holding `f` and scrolling or moving the
+      mouse
     * `space` (or `m`, or the Animate box) plays the blend back and forth, as
       it does when the visualizer opens or you pick an example, and pauses it;
       taking the homotopy in hand stops it too
     * **Copy link** copies a link to exactly this view. The page URL always
       shows it as well: the example, the formula, `p`, the grid, the coloring,
-      the view and the homotopy, written as what differs from the example.
+      the view, the stage and the homotopy, written as what differs from the
+      example.
       Editing the `#…` part of the URL by hand works too
     * `e` steps to the next example
     * hold `x` or the "Hold to show source" button to peek at the source grid

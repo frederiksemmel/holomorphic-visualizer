@@ -262,6 +262,27 @@ mod tests {
     }
 
     #[test]
+    fn a_stage_starts_from_the_stage_before_not_from_the_identity() {
+        // Stage 4 of cos(2z) + 1 at t = 0 is the stage before: cos(2z).
+        let stages = expr::parse("cos(2 * z) + 1").unwrap().stages();
+        let ends = expr::Homotopy::of_stage(&stages, 4).unwrap();
+        let p = Complex::new(1.0, 0.0);
+        let source = Complex::new(0.4f32, 0.3);
+        let w = (2.0 * source).cos();
+        for (t, w) in [(0.0, w), (1.0, w + 1.0), (0.5, w + 0.5)] {
+            let (found, _) = preimages(
+                |z| ends.map(z, p, t),
+                |z| ends.derivative(z, p, t),
+                domain(0.0, 1.0, 0.0, 1.0),
+                w,
+                TOLERANCE,
+                10,
+            );
+            assert_roots(&found, &[source]);
+        }
+    }
+
+    #[test]
     fn an_empty_domain_has_no_sources() {
         assert!(sources("z", domain(1.0, -1.0, -1.0, 1.0), Complex::new(0.0, 0.0)).is_empty());
     }

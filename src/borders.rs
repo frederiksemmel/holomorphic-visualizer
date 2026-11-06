@@ -196,6 +196,18 @@ mod tests {
     }
 
     #[test]
+    fn a_stage_at_its_start_draws_the_stage_before() {
+        // At t = 0, stage 3 of i(z + 2) draws z + 2: the grid shifted right, not at z.
+        let stages = expr::parse("i * (z + 2)").unwrap().stages();
+        let ends = expr::Homotopy::of_stage(&stages, 3).unwrap();
+        let p = Complex::new(1.0, 0.0);
+        let to_screen = |z| ends.map(z, p, 0.0) * PPU;
+        let (border, z) = nearest_border(GRID, &to_screen, Complex::new(310.0, 50.0)).unwrap();
+        assert_eq!(border, Border::XMax);
+        assert!((z - Complex::new(1.0, 0.5)).norm() < 1e-4, "{z}");
+    }
+
+    #[test]
     fn non_finite_points_are_skipped() {
         // 1/z blows up at 0, which lies on y = 0 of this grid.
         let grid = [-1.0, 1.0, 0.0, 1.0];
