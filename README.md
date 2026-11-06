@@ -171,25 +171,32 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       window for a cubic, the grid stays as the shader draws it.
 * Stages take a function apart into the steps that build it. The app reads
   them off the formula: `sin(cos(p * z))` has the stages `p·z`, `cos(p·z)` and
-  `sin(cos(p·z))`. Keys `1` to `9` pick a stage and `0` goes back
-  to the full function. The control window has a button for each, showing its
-  formula, which also reaches stages past 9 and works on a phone.
-    * Stage k shows its own step: the homotopy blends stage k − 1 into stage k,
-      and stage 1 starts from the identity. Picking a stage shows it finished,
-      so scrubbing back reveals where it came from and Animate plays that step
-      alone; if the animation is already playing, it goes on from the start of
-      the new stage. In the full function the homotopy goes from the identity
-      to f, start to finish.
+  `sin(cos(p·z))`.
+    * Select a run of stages to choose what the homotopy runs between: from the
+      stage before the first one selected, or the identity, to the last one.
+      All of them is the whole homotopy, from the identity to f.
+    * `1` to `9` picks a stage and `0` selects all. `shift + 1` to `9` makes a
+      range from the stage last picked. `,` and `.` move the selection along,
+      `shift + ,` and `shift + .` move only its end. In the control window, a
+      tap picks a stage and the next tap makes a range with it (or use shift),
+      which also reaches stages past 9 and works on a phone.
+    * Through stages (`t` switches) plays each one in turn, from a smooth
+      partition of unity over them, so the motion comes to rest on every stage.
+      Straight line blends directly from one end of the selection to the other.
+    * Changing the selection keeps the picture when it can: going on to the
+      next stage starts where the last one finished. Otherwise it shows
+      finished, so scrubbing back reveals where it came from. If the animation
+      is already playing, it goes on from the start of the selection.
     * The formula is walked from the outside in, for as long as exactly one
       operand of a step is built from z. Constants, `p` and a bare `z` belong
       to their step, so `p * z` is one stage and `p * z * z` has the stages
       `p·z` and `p·z·z`. When several operands are built from z, that step
       stays one stage: `sin(z) * cos(z)` can't be split, and neither can the
       Möbius example.
-    * The hover readout (`g3(z)` is stage 3), the colors and the mouse all
-      follow the stage. Stretch and Rotation show the composition up to the
-      stage, not its last step alone. Editing the formula or picking an example
-      goes back to the full function.
+    * The hover readout (`g2(z)` is stage 2, `f(z)` the last), the colors and
+      the mouse all follow the homotopy. Stretch and Rotation show the
+      composition up to the end of the selection, not its last step alone.
+      Editing the formula or picking an example selects all the stages again.
 * Color modes (`c` cycles them, or pick one in the control window):
     * **White**: plain lines.
     * **Source**: horizontal lines warm, vertical lines cool, shaded by

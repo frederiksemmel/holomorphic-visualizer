@@ -264,8 +264,8 @@ mod tests {
     #[test]
     fn a_stage_starts_from_the_stage_before_not_from_the_identity() {
         // Stage 3 of cos(2z) + 1 at t = 0 is the stage before: cos(2z).
-        let stages = expr::parse("cos(2 * z) + 1").unwrap().stages();
-        let ends = expr::Homotopy::of_stage(&stages, 3).unwrap();
+        let chain = expr::parse("cos(2 * z) + 1").unwrap().chain();
+        let ends = expr::Homotopy::between(&chain, 2, 3);
         let p = Complex::new(1.0, 0.0);
         let source = Complex::new(0.4f64, 0.3);
         let w = (2.0 * source).cos();

@@ -7,6 +7,7 @@ pub mod expr;
 pub mod morph;
 pub mod patch;
 pub mod readout;
+pub mod route;
 pub mod scene;
 
 /// Complex arithmetic for the grid shader, used by the `f` that [`expr`] generates.

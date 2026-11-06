@@ -18,10 +18,15 @@ struct GridParams {
     h_segments: u32,
     v_segments: u32,
     pixels_per_unit: f32,
-    // 0 shows f_start, 1 shows f.
+    // 0 shows stage from_stage, 1 shows stage to_stage.
     blend: f32,
-    // Not 0: peeking at the source grid, which is z itself whatever f_start is.
+    // Not 0: peeking at the source grid, which is z itself whatever the stage.
     peek: u32,
+    from_stage: u32,
+    to_stage: u32,
+    // The stage that Stretch and Rotation color by: the end of the whole
+    // selection, so that they stay the same from one section to the next.
+    color_stage: u32,
     line_width: f32,
     coloring: u32,
     // Stretch factors beyond 2^±stretch_octaves get the extreme color.
@@ -50,21 +55,20 @@ struct GridParams {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: GridParams;
 
-// The two ends of the homotopy, `f_start(z, p)` and `f(z, p)`, with
-// `START_IS_IDENTITY`, and the complex helpers they use (`cmul`, `cexp`, ...)
-// are appended at runtime: see `Homotopy::to_wgsl` in src/expr.rs,
-// src/complex.wgsl and `grid_shader_source` in src/main.rs. For a whole
-// function f_start is the identity; for one stage, the stage before it.
+// `stage(k, z, p)`, every stage of the formula (stage 0 is the identity), and
+// the complex helpers they use (`cmul`, `cexp`, ...) are appended at runtime:
+// see `chain_wgsl` in src/expr.rs, src/complex.wgsl and `grid_shader_source` in
+// src/main.rs.
 
 // ---------------------------------------------------------------------------
 
-// The map on screen: blends from f_start to f.
+// The map on screen: blends from one stage to the next.
 fn g(z: vec2<f32>) -> vec2<f32> {
     if params.peek != 0u {
         return z;
     }
-    let start = f_start(z, params.parameter);
-    return start + params.blend * (f(z, params.parameter) - start);
+    let start = stage(params.from_stage, z, params.parameter);
+    return start + params.blend * (stage(params.to_stage, z, params.parameter) - start);
 }
 
 // The patch, on screen.
@@ -85,30 +89,24 @@ fn source_of(at: vec2<f32>) -> vec2<f32> {
     return at;
 }
 
-// f'(z) by central differences. f is holomorphic, so any direction works.
-fn f_prime(z: vec2<f32>) -> vec2<f32> {
-    let h = 1e-3 * max(1.0, length(z));
-    let p = params.parameter;
-    return (f(z + vec2(h, 0.0), p) - f(z - vec2(h, 0.0), p)) / (2.0 * h);
-}
-
-// The same for f_start.
-fn f_start_prime(z: vec2<f32>) -> vec2<f32> {
-    if START_IS_IDENTITY {
+// The derivative of stage k at z, by central differences. Stages are
+// holomorphic, so any direction works.
+fn stage_prime(k: u32, z: vec2<f32>) -> vec2<f32> {
+    if k == 0u {
         return ONE;
     }
     let h = 1e-3 * max(1.0, length(z));
     let p = params.parameter;
-    return (f_start(z + vec2(h, 0.0), p) - f_start(z - vec2(h, 0.0), p)) / (2.0 * h);
+    return (stage(k, z + vec2(h, 0.0), p) - stage(k, z - vec2(h, 0.0), p)) / (2.0 * h);
 }
 
-// g'(z) from f'(z): g blends linearly, so its derivative does too.
-fn g_prime(z: vec2<f32>, df: vec2<f32>) -> vec2<f32> {
+// g'(z): g blends linearly, so its derivative does too.
+fn g_prime(z: vec2<f32>) -> vec2<f32> {
     if params.peek != 0u {
         return ONE;
     }
-    let start = f_start_prime(z);
-    return start + params.blend * (df - start);
+    let start = stage_prime(params.from_stage, z);
+    return start + params.blend * (stage_prime(params.to_stage, z) - start);
 }
 
 // The grid line that segment i lies on, and where on it. Point j of the line,
@@ -239,9 +237,9 @@ fn source(horizontal: bool, s: f32) -> vec3<f32> {
     return mix(vec3(0.2, 0.8, 1.0), vec3(0.7, 0.4, 1.0), s);
 }
 
-// `df` is f'(z), not the blended g'(z), so Stretch and Rotation keep showing
-// f (for a stage: the whole composition up to it) while peeking at the source
-// grid, like Phase does.
+// `df` is the derivative of the selection's last stage, not the blended g'(z),
+// so Stretch and Rotation keep showing it (the whole composition up to it)
+// while peeking at the source grid, like Phase does.
 fn line_color(z: vec2<f32>, horizontal: bool, df: vec2<f32>) -> vec3<f32> {
     switch params.coloring {
         case COLORING_SOURCE: {
@@ -291,12 +289,12 @@ fn finite(a: vec2<f32>, b: vec2<f32>) -> bool {
     return all(abs(a) < vec2(MAX_SCREEN_COORD)) && all(abs(b) < vec2(MAX_SCREEN_COORD));
 }
 
-// A step `along` the layout at `at` as it comes out on screen, where f' is `df`.
-fn tangent(at: vec2<f32>, along: vec2<f32>, df: vec2<f32>) -> vec2<f32> {
+// A step `along` the layout at `at` as it comes out on screen.
+fn tangent(at: vec2<f32>, along: vec2<f32>) -> vec2<f32> {
     if params.patched != 0u {
         return cmul(cubic_prime(at), along);
     }
-    return cmul(g_prime(at, df), along * params.pixels_per_unit);
+    return cmul(g_prime(at), along * params.pixels_per_unit);
 }
 
 @vertex
@@ -347,8 +345,8 @@ fn vertex(
     let finish = point(l, end);
     let start_z = source_of(start);
     let end_z = source_of(finish);
-    let df_start = f_prime(start_z);
-    let df_end = f_prime(end_z);
+    let df_start = stage_prime(params.color_stage, start_z);
+    let df_end = stage_prime(params.color_stage, end_z);
     let z = select(start_z, end_z, at_end);
     let df = select(df_start, df_end, at_end);
 
@@ -360,8 +358,8 @@ fn vertex(
     // midpoint near the pole has a huge derivative that excuses any chord.
     // Every corner of the quad must reach the same verdict, so this uses only
     // per-segment values.
-    let tangent_start = tangent(start, finish - start, df_start);
-    let tangent_end = tangent(finish, finish - start, df_end);
+    let tangent_start = tangent(start, finish - start);
+    let tangent_end = tangent(finish, finish - start);
     let chord_vec = b - a;
     let chord = length(chord_vec);
     let expected = max(length(tangent_start), length(tangent_end));

@@ -93,6 +93,14 @@ impl Function {
         self.0 == Expr::Z
     }
 
+    /// The stages with the identity before them, as stage 0: what a route
+    /// through the function (see `crate::route`) picks from.
+    pub fn chain(&self) -> Vec<Function> {
+        let mut chain = vec![Function::identity()];
+        chain.extend(self.stages());
+        chain
+    }
+
     /// The steps that build f, innermost first, up to f itself. The identity
     /// is not one of them: it is where the first step starts from.
     ///
@@ -235,33 +243,19 @@ pub fn function_wgsl(body: &str) -> String {
     format!("fn f(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {{\n    return {body};\n}}\n")
 }
 
-/// The two functions the homotopy runs between: `start` at t = 0, `end` at
-/// t = 1. Everything that draws or inverts the map works from this pair, so
-/// that nothing takes the start for the identity.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Homotopy {
-    pub start: Function,
-    pub end: Function,
+/// The two functions a leg of the homotopy runs between: `start` at t = 0,
+/// `end` at t = 1. Everything on the CPU that draws or inverts the map works
+/// from this pair, so that nothing takes the start for the identity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Homotopy<'a> {
+    pub start: &'a Function,
+    pub end: &'a Function,
 }
 
-impl Homotopy {
-    /// Stage `stage` of [`Function::stages`], counted from 1 as the keys do:
-    /// the stage before it into this one, and the identity into stage 1.
-    /// Stage 0 is the whole function, from the identity to the last stage.
-    /// `None` if there is no such stage.
-    pub fn of_stage(stages: &[Function], stage: usize) -> Option<Homotopy> {
-        let end = match stage {
-            0 => stages.last()?,
-            k => stages.get(k - 1)?,
-        };
-        let start = match stage {
-            0 | 1 => Function(Expr::Z),
-            k => stages[k - 2].clone(),
-        };
-        Some(Homotopy {
-            start,
-            end: end.clone(),
-        })
+impl<'a> Homotopy<'a> {
+    /// From stage `from` to stage `to` of a [`Function::chain`].
+    pub fn between(chain: &'a [Function], from: usize, to: usize) -> Homotopy<'a> {
+        Homotopy { start: &chain[from], end: &chain[to] }
     }
 
     /// At blend `t` the grid is where it started: every point is at z itself.
@@ -296,19 +290,27 @@ impl Homotopy {
         let (start, end) = (self.start.jet(z, p), self.end.jet(z, p));
         std::array::from_fn(|k| start[k] + t * (end[k] - start[k]))
     }
+}
 
-    /// The WGSL definitions `src/grid.wgsl` needs: `f` for the end, `f_start`
-    /// for the start, and whether that is the identity, whose derivative is
-    /// then exact instead of a finite difference.
-    pub fn to_wgsl(&self) -> String {
-        format!(
-            "{}fn f_start(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {{\n    return {};\n}}\n\
-             const START_IS_IDENTITY: bool = {};\n",
-            function_wgsl(&self.end.to_wgsl()),
-            self.start.to_wgsl(),
-            self.start.is_identity(),
-        )
+/// The WGSL definitions `src/grid.wgsl` needs: `stage(k, z, p)`, for every
+/// stage of a [`Function::chain`]. They all go in one shader, so that moving
+/// between them changes a uniform: recompiling a shader takes the grid off
+/// screen for a moment. Each stage calls the one before it, which keeps the
+/// source of a long chain linear in its length.
+pub fn chain_wgsl(chain: &[Function]) -> String {
+    let mut source = String::new();
+    for k in 1..chain.len() {
+        let inner = format!("stage{}(z, p)", k - 1);
+        let inner = (k > 1).then_some((&chain[k - 1].0, inner.as_str()));
+        let body = chain[k].0.wgsl_over(inner);
+        source += &format!("fn stage{k}(z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {{\n    return {body};\n}}\n");
     }
+    source += "fn stage(k: u32, z: vec2<f32>, p: vec2<f32>) -> vec2<f32> {\n    switch k {\n";
+    for k in 1..chain.len() {
+        source += &format!("        case {k}u: {{ return stage{k}(z, p); }}\n");
+    }
+    source += "        default: { return z; }\n    }\n}\n";
+    source
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -499,6 +501,17 @@ impl Expr {
     }
 
     fn to_wgsl(&self) -> String {
+        self.wgsl_over(None)
+    }
+
+    /// As `to_wgsl`, with `inner.1`, a WGSL expression, for `inner.0`.
+    fn wgsl_over(&self, inner: Option<(&Expr, &str)>) -> String {
+        if let Some((known, call)) = inner
+            && self == known
+        {
+            return call.to_owned();
+        }
+        let wgsl = |a: &Expr| a.wgsl_over(inner);
         match self {
             // `{:?}` always writes a decimal point or exponent, so WGSL reads a
             // float. The GPU has no f64, and rejects a literal that doesn't fit.
@@ -506,16 +519,16 @@ impl Expr {
             Expr::Z => "z".into(),
             Expr::P => "p".into(),
             Expr::I => "I".into(),
-            Expr::Neg(a) => format!("(-{})", a.to_wgsl()),
-            Expr::Add(a, b) => format!("({} + {})", a.to_wgsl(), b.to_wgsl()),
-            Expr::Sub(a, b) => format!("({} - {})", a.to_wgsl(), b.to_wgsl()),
-            Expr::Mul(a, b) => format!("cmul({}, {})", a.to_wgsl(), b.to_wgsl()),
-            Expr::Div(a, b) => format!("cdiv({}, {})", a.to_wgsl(), b.to_wgsl()),
+            Expr::Neg(a) => format!("(-{})", wgsl(a)),
+            Expr::Add(a, b) => format!("({} + {})", wgsl(a), wgsl(b)),
+            Expr::Sub(a, b) => format!("({} - {})", wgsl(a), wgsl(b)),
+            Expr::Mul(a, b) => format!("cmul({}, {})", wgsl(a), wgsl(b)),
+            Expr::Div(a, b) => format!("cdiv({}, {})", wgsl(a), wgsl(b)),
             Expr::Pow(a, b) => match b.integer() {
-                Some(n) => format!("cpowi({}, {n})", a.to_wgsl()),
-                None => format!("cpow({}, {})", a.to_wgsl(), b.to_wgsl()),
+                Some(n) => format!("cpowi({}, {n})", wgsl(a)),
+                None => format!("cpow({}, {})", wgsl(a), wgsl(b)),
             },
-            Expr::Call(function, a) => format!("{function}({})", a.to_wgsl()),
+            Expr::Call(function, a) => format!("{function}({})", wgsl(a)),
         }
     }
 
@@ -1023,30 +1036,27 @@ mod tests {
         assert_eq!(text("2pi"), "2·π");
     }
 
-    fn homotopy(formula: &str, stage: usize) -> Homotopy {
-        Homotopy::of_stage(&parse(formula).unwrap().stages(), stage).unwrap()
+    fn homotopy(formula: &str, from: usize, to: usize) -> Homotopy<'static> {
+        let chain = parse(formula).unwrap().chain();
+        Homotopy::between(Box::leak(chain.into_boxed_slice()), from, to)
     }
 
     #[test]
-    fn each_stage_runs_from_the_stage_before() {
-        let formula = "sin(cos(p*z))";
-        let ends = |stage| {
-            let Homotopy { start, end } = homotopy(formula, stage);
+    fn the_chain_is_the_identity_then_the_stages() {
+        let chain: Vec<String> = parse("sin(cos(p*z))").unwrap().chain().iter().map(Function::to_string).collect();
+        assert_eq!(chain, ["z", "p·z", "cos(p·z)", "sin(cos(p·z))"]);
+        let start_and_end = |from, to| {
+            let Homotopy { start, end } = homotopy("sin(cos(p*z))", from, to);
             (start.to_string(), end.to_string())
         };
-        assert_eq!(ends(0), ("z".into(), "sin(cos(p·z))".into()));
-        assert_eq!(ends(1), ("z".into(), "p·z".into()));
-        assert_eq!(ends(2), ("p·z".into(), "cos(p·z)".into()));
-        assert_eq!(ends(3), ("cos(p·z)".into(), "sin(cos(p·z))".into()));
-        let stages = parse(formula).unwrap().stages();
-        assert_eq!(Homotopy::of_stage(&stages, 4), None);
+        assert_eq!(start_and_end(1, 3), ("p·z".into(), "sin(cos(p·z))".into()));
     }
 
     #[test]
     fn the_map_runs_between_the_two_ends() {
         let p = Complex::new(0.5, -2.0);
         let z = Complex::new(0.3, 0.7);
-        let ends = homotopy("sin(cos(p*z))", 2);
+        let ends = homotopy("sin(cos(p*z))", 1, 2);
         let (start, end) = (p * z, (p * z).cos());
         assert_close(ends.map(z, p, 0.0), start, "t = 0");
         assert_close(ends.map(z, p, 1.0), end, "t = 1");
@@ -1064,7 +1074,7 @@ mod tests {
         let p = Complex::new(0.5, -2.0);
         let z = Complex::new(0.3, 0.7);
         let f = parse("exp(p * z)").unwrap();
-        let ends = homotopy("exp(p * z)", 0);
+        let ends = homotopy("exp(p * z)", 0, 2);
         let one = Complex::new(1.0, 0.0);
         for t in [0.25, 0.5, 1.0] {
             assert_eq!(ends.map(z, p, t), z + t * (f.eval(z, p) - z));
@@ -1075,20 +1085,19 @@ mod tests {
         }
         // At the identity it is z exactly, even where f blows up.
         let pole = Complex::new(0.0, 0.0);
-        assert_eq!(homotopy("1/z", 0).map(pole, p, 0.0), pole);
-        assert_eq!(homotopy("1/z", 0).derivative(pole, p, 0.0), one);
+        assert_eq!(homotopy("1/z", 0, 1).map(pole, p, 0.0), pole);
+        assert_eq!(homotopy("1/z", 0, 1).derivative(pole, p, 0.0), one);
     }
 
     #[test]
     fn only_the_identity_leaves_the_grid_unmapped() {
-        let unmapped = |stage, t| homotopy("sin(cos(p*z))", stage).unmapped(t);
-        assert!(unmapped(0, 0.0) && !unmapped(0, 0.5) && !unmapped(0, 1.0));
-        // Stage 1 starts from the identity.
-        assert!(unmapped(1, 0.0) && !unmapped(1, 0.5) && !unmapped(1, 1.0));
-        // From stage 2 on even t = 0 is mapped.
-        assert!(!unmapped(2, 0.0) && !unmapped(3, 0.0));
+        let unmapped = |from, to, t| homotopy("sin(cos(p*z))", from, to).unmapped(t);
+        assert!(unmapped(0, 3, 0.0) && !unmapped(0, 3, 0.5) && !unmapped(0, 3, 1.0));
+        assert!(unmapped(0, 1, 0.0) && !unmapped(0, 1, 0.5));
+        // Past the identity even t = 0 is mapped.
+        assert!(!unmapped(1, 2, 0.0) && !unmapped(2, 3, 0.0));
         // The identity itself stays put all the way.
-        assert!(homotopy("z", 1).unmapped(1.0));
+        assert!(homotopy("z", 0, 1).unmapped(1.0));
     }
 
     #[test]
@@ -1098,13 +1107,27 @@ mod tests {
     }
 
     #[test]
-    fn the_shader_learns_where_the_homotopy_starts() {
-        let wgsl = homotopy("sin(cos(p*z))", 2).to_wgsl();
+    fn the_shader_gets_every_stage_each_built_on_the_one_before() {
+        let wgsl = chain_wgsl(&parse("sin(cos(p*z))").unwrap().chain());
         assert!(wgsl.contains("return cmul(p, z);"), "{wgsl}");
-        assert!(wgsl.contains("return ccos(cmul(p, z));"), "{wgsl}");
-        assert!(wgsl.contains("START_IS_IDENTITY: bool = false"), "{wgsl}");
-        assert!(homotopy("sin(z)", 0).to_wgsl().contains("START_IS_IDENTITY: bool = true"));
-        assert!(homotopy("sin(z)", 1).to_wgsl().contains("START_IS_IDENTITY: bool = true"));
+        assert!(wgsl.contains("return ccos(stage1(z, p));"), "{wgsl}");
+        assert!(wgsl.contains("return csin(stage2(z, p));"), "{wgsl}");
+        assert!(wgsl.contains("case 3u: { return stage3(z, p); }"), "{wgsl}");
+        assert!(wgsl.contains("default: { return z; }"), "{wgsl}");
+    }
+
+    #[test]
+    fn a_long_chain_makes_a_short_shader() {
+        let formula = format!("z{}", " + 1".repeat(400));
+        let chain = parse(&formula).unwrap().chain();
+        assert_eq!(chain.len(), 401);
+        assert!(chain_wgsl(&chain).len() < 100_000);
+    }
+
+    #[test]
+    fn a_stage_keeps_what_its_step_adds() {
+        let wgsl = chain_wgsl(&parse("p*z*z").unwrap().chain());
+        assert!(wgsl.contains("return cmul(stage1(z, p), z);"), "{wgsl}");
     }
 
     #[test]

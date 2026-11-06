@@ -224,8 +224,8 @@ mod tests {
 
     #[test]
     fn a_stage_blends_its_ends() {
-        let stages = expr::parse("sin(cos(p*z))").unwrap().stages();
-        let ends = Homotopy::of_stage(&stages, 2).unwrap();
+        let chain = expr::parse("sin(cos(p*z))").unwrap().chain();
+        let ends = Homotopy::between(&chain, 1, 2);
         let (source, t, ppu) = (Complex::new(0.7, 0.4), 0.3, 1e9);
         let position = -ends.map(source, P, t);
         let patch = Patch::new(source, ends.jet(source, P, t), position, ppu, REACH, &grid(), BUDGET)

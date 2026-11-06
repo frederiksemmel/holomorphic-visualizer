@@ -5,6 +5,7 @@
 //! examples themselves get short links. Fields that are missing or don't parse
 //! keep the example's value, so old or mangled links still open something.
 
+use crate::route::Path;
 use crate::examples::EXAMPLES;
 use num::Complex;
 
@@ -73,13 +74,14 @@ pub struct Scene {
     /// Offset of the complex plane, in plane units.
     pub position: [f64; 2],
     pub pixels_per_unit: f64,
-    /// Which stage of the formula shows (see `expr::Function::stages`), or 0
-    /// for all of it. Only the formula knows how many there are, so a link
-    /// can ask for one that doesn't exist; the app shows all of it then.
-    pub stage: usize,
-    /// Blend along the homotopy from its start (0) to its end (1): the
-    /// identity to `f`, or the stage before to this one. `None` while the
-    /// animation plays.
+    /// The first and last stage selected (see `crate::route`), or `None` for
+    /// all of them. Only the formula knows how many there are, so a link can
+    /// ask for some that don't exist; the app selects them all then.
+    pub stages: Option<(usize, usize)>,
+    /// How the homotopy gets from its start to its end.
+    pub path: Path,
+    /// How far along the homotopy, from its start (0) to its end (1). `None`
+    /// while the animation plays.
     pub homotopy: Option<f64>,
 }
 
@@ -96,7 +98,8 @@ impl Scene {
             coloring: Coloring::default(),
             position: [0.0, 0.0],
             pixels_per_unit: DEFAULT_PIXELS_PER_UNIT,
-            stage: 0,
+            stages: None,
+            path: Path::Straight,
             homotopy: None,
         }
     }
@@ -127,7 +130,14 @@ impl Scene {
             base.coloring.label().to_ascii_lowercase(),
         );
         add("view", self.view(), base.view());
-        add("stage", self.stage.to_string(), base.stage.to_string());
+        match self.stages {
+            Some((first, last)) if first == last => fields.push(format!("stages={first}")),
+            Some((first, last)) => fields.push(format!("stages={first}-{last}")),
+            None => {}
+        }
+        if self.path == Path::Stages {
+            fields.push("path=stages".to_owned());
+        }
         if let Some(t) = self.homotopy {
             fields.push(format!("t={}", number(t, 3)));
         }
@@ -179,9 +189,13 @@ impl Scene {
                         scene.pixels_per_unit = pixels_per_unit;
                     }
                 }
-                "stage" => {
-                    if let Ok(stage) = value.parse() {
-                        scene.stage = stage;
+                "stages" => {
+                    let (first, last) = value.split_once('-').unwrap_or((&value, &value));
+                    scene.stages = first.parse().ok().zip(last.parse().ok());
+                }
+                "path" => {
+                    if value == "stages" {
+                        scene.path = Path::Stages;
                     }
                 }
                 "t" => {
@@ -318,7 +332,7 @@ mod tests {
             coloring: Coloring::Stretch,
             position: [0.125, -2.0],
             pixels_per_unit: 600.0,
-            stage: 3,
+            stages: Some((3, 3)),
             homotopy: Some(0.5),
             ..Scene::example(4)
         };
@@ -357,44 +371,40 @@ mod tests {
     }
 
     #[test]
-    fn the_stage_is_left_out_for_the_whole_function() {
-        assert!(!Scene::example(1).to_fragment().contains("stage"));
+    fn stages_are_left_out_when_all_are_selected() {
+        assert!(!Scene::example(1).to_fragment().contains("stages"));
         let scene = Scene {
-            stage: 2,
+            stages: Some((2, 3)),
+            path: Path::Stages,
             homotopy: Some(1.0),
             ..Scene::example(0)
         };
-        assert_eq!(scene.to_fragment(), "stage=2&t=1");
-        assert_eq!(Scene::from_fragment("stage=2&t=1"), scene);
-        // While a stage plays there is no t, and the link plays it too.
-        let playing = Scene {
-            homotopy: None,
-            ..scene
-        };
+        assert_eq!(scene.to_fragment(), "stages=2-3&path=stages&t=1");
+        assert_eq!(Scene::from_fragment("stages=2-3&path=stages&t=1"), scene);
+        // While it plays there is no t, and the link plays it too.
+        let playing = Scene { homotopy: None, ..scene };
         assert_eq!(Scene::from_fragment(&playing.to_fragment()), playing);
     }
 
     #[test]
-    fn links_from_before_stages_show_the_whole_function() {
-        for link in [
-            "",
-            "ex=escher&color=source",
-            "f=exp%281/z%29&t=0.5&view=0,0,300",
-        ] {
-            assert_eq!(Scene::from_fragment(link).stage, 0, "{link}");
+    fn one_stage_is_written_as_one_number() {
+        let scene = Scene { stages: Some((2, 2)), homotopy: Some(1.0), ..Scene::example(0) };
+        assert_eq!(scene.to_fragment(), "stages=2&t=1");
+        assert_eq!(Scene::from_fragment("stages=2&t=1"), scene);
+    }
+
+    #[test]
+    fn links_from_before_stages_select_them_all() {
+        for link in ["", "ex=escher&color=source", "f=exp%281/z%29&t=0.5&view=0,0,300"] {
+            let scene = Scene::from_fragment(link);
+            assert_eq!((scene.stages, scene.path), (None, Path::Straight), "{link}");
         }
     }
 
     #[test]
-    fn a_stage_that_is_no_number_means_the_whole_function() {
-        for link in [
-            "stage=two",
-            "stage=-1",
-            "stage=1.5",
-            "stage=",
-            "stage=99999999999999999999999",
-        ] {
-            assert_eq!(Scene::from_fragment(link).stage, 0, "{link}");
+    fn stages_that_are_no_numbers_select_them_all() {
+        for link in ["stages=two", "stages=-1", "stages=1.5", "stages=", "stages=1-", "stages=99999999999999999999999"] {
+            assert_eq!(Scene::from_fragment(link).stages, None, "{link}");
         }
     }
 
