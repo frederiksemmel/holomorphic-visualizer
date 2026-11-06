@@ -41,7 +41,7 @@ const PATCH_ABOVE: f64 = 1e5;
 const ZOOM_PER_POINT: f64 = 0.005;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range
 /// at the default zoom (see [`Model::homotopy_travel`]).
-const HOMOTOPY_TRAVEL: f64 = 300.0;
+const HOMOTOPY_TRAVEL: f64 = 900.0;
 /// Seconds that holding ← or → takes across the whole homotopy range at the
 /// default zoom.
 const ARROW_SECONDS: f32 = 2.0;
@@ -830,8 +830,10 @@ impl Model {
     /// the plane, so zoomed in by k it moves k times as far on screen: the
     /// travel grows with the zoom to keep that motion as fast as at the
     /// default zoom. Zoomed out it stays put, or a flick would jump from z to f.
+    /// Each section of the route gets the whole of it, as it does in time.
     fn homotopy_travel(&self) -> f64 {
-        HOMOTOPY_TRAVEL * (self.pixels_per_unit / DEFAULT_PIXELS_PER_UNIT).max(1.0)
+        let zoom = (self.pixels_per_unit / DEFAULT_PIXELS_PER_UNIT).max(1.0);
+        HOMOTOPY_TRAVEL * zoom * self.route.sections() as f64
     }
 
     /// Moves p by `delta` screen points. p is not a point on screen, so this
@@ -2505,6 +2507,18 @@ mod tests {
         model.morph = Morph::Since(3.0);
         model.set_path(Path::Stages);
         assert_eq!((model.homotopy, model.morph), (0.25, Morph::Starting(0.25)));
+    }
+
+    #[test]
+    fn a_scroll_scrubs_a_third_as_fast_and_each_section_gets_the_whole_travel() {
+        let mut model = composition();
+        model.homotopy = 0.0;
+        model.scrub(90.0);
+        assert!((model.homotopy - 0.1).abs() < 1e-6, "{}", model.homotopy);
+        model.homotopy = 0.0;
+        model.set_path(Path::Stages);
+        model.scrub(90.0);
+        assert!((model.homotopy - 0.1 / 3.0).abs() < 1e-6, "{}", model.homotopy);
     }
 
     #[test]
