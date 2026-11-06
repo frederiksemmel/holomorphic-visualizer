@@ -18,11 +18,20 @@ const POINTS_PER_LINE: f32 = 24.0;
 /// Finest grid the controls offer; below the library's hard cap
 /// (`conformal_visualizer::MAX_RESOLUTION`) to keep the line count sane.
 const MAX_UI_RESOLUTION: f32 = 6.0;
-/// The grid edges stay within `[-DOMAIN_LIMIT, DOMAIN_LIMIT]`.
-const DOMAIN_LIMIT: f32 = 15.0;
-/// Zoom limits, in screen points per unit. Positions are f32, so panning loses
-/// about |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
-const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=1_000_000.0;
+/// The grid edges stay within `[-DOMAIN_LIMIT, DOMAIN_LIMIT]`. Not a limit
+/// anyone should meet: it only keeps the arithmetic finite, and f32 has long
+/// stopped telling neighbouring grid lines apart out here.
+const DOMAIN_LIMIT: f32 = 1e12;
+/// Fraction of an edge's size that dragging its field moves it per screen
+/// point, so it covers tiny and huge values alike.
+const EDGE_DRAG_SPEED: f64 = 0.005;
+/// Zoom limits, in screen points per unit: zoomed all the way out, the window
+/// spans about `DOMAIN_LIMIT`. Positions are f32, so panning loses about
+/// |z| · 1e-7 units; at 1e6 that stays under a pixel for |z| up to ~5.
+const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1e-9..=1_000_000.0;
+/// Exponent of the zoom per screen point of Ctrl + scroll or of dragging the
+/// zoom field. Its range spans too many decades for a slider's track.
+const ZOOM_PER_POINT: f32 = 0.005;
 /// Scrolling or mouse travel, in screen points, across the whole homotopy range
 /// at the default zoom (see [`Model::homotopy_travel`]).
 const HOMOTOPY_TRAVEL: f32 = 300.0;
@@ -40,10 +49,13 @@ const SCROLL_PER_SQUARE: f32 = DEFAULT_PIXELS_PER_UNIT / (1 << DEFAULT_RESOLUTIO
 /// At most this many squares per scroll event, so a flick doesn't throw the
 /// border across the plane.
 const MAX_SCROLL_SQUARES: f32 = 4.0;
+/// The control window fades to this while one of its sliders is dragged, to
+/// show the result underneath: on a phone it covers most of the canvas.
+const HELD_PANEL_OPACITY: f32 = 0.2;
+/// How long that fade takes.
+const PANEL_FADE_SECONDS: f32 = 0.1;
 /// Shift slows dragging p (on its pad or with the right button) to this.
 const FINE: f32 = 0.2;
-/// Largest move of the whole grid per Alt + drag or scroll event, in grid units.
-const MAX_GRID_STEP: f32 = 1.0;
 /// Straight segments per unit length of grid line, so lines bend smoothly under `f`.
 const MAX_DENSITY: f32 = 2048.0;
 /// Upper bound on segments drawn per frame; large grids get coarser sampling.
@@ -263,7 +275,7 @@ enum Drag {
     Resolution,
     /// Moves the border Shift holds, like Shift + scroll.
     HeldBorder,
-    /// Slides the whole grid (Alt).
+    /// Slides the source grid (Alt).
     Grid,
 }
 
@@ -329,12 +341,6 @@ struct Model {
     scrolled_border: Option<(Border, Complex<f32>)>,
     /// Shift was down at the last update.
     shift_held: bool,
-    /// The map's derivative at the grid point under the cursor when Alt went
-    /// down, which Alt + drag or scroll moves the whole grid by; like
-    /// `scrolled_border`, kept until Alt comes up.
-    grabbed_grid: Option<Complex<f32>>,
-    /// Alt was down at the last update.
-    alt_held: bool,
     /// The "hold" button in the control window is pressed.
     peek_button: bool,
     /// Show the source grid for now (hold button or X).
@@ -351,6 +357,9 @@ struct Model {
     /// user taps the header (`None`), it is open on wide screens only; that is
     /// decided every frame, as the window gets its real size a few frames in.
     panel_open: Option<bool>,
+    /// A slider or other dragged value in the control window was held at the
+    /// last update.
+    slider_held: bool,
 }
 
 impl Model {
@@ -491,45 +500,14 @@ impl Model {
         }
     }
 
-    /// The map's derivative at the grid point drawn nearest `cursor` (from a
-    /// coarse sample of the grid), for Alt + drag or scroll to hold on to.
-    fn grab_grid(&self, cursor: Vec2) -> Option<Complex<f32>> {
-        const SAMPLES: usize = 48;
-        let [x_min, x_max, y_min, y_max] = self.grid();
-        if x_max < x_min || y_max < y_min {
-            return None;
-        }
-        let cursor = complex(cursor);
-        let lerp = |a: f32, b: f32, k: usize| a + (b - a) * k as f32 / SAMPLES as f32;
-        (0..=SAMPLES)
-            .flat_map(|i| (0..=SAMPLES).map(move |j| Complex::new(lerp(x_min, x_max, i), lerp(y_min, y_max, j))))
-            .map(|z| (z, (self.grid_to_screen(z) - cursor).norm()))
-            .filter(|(_, distance)| distance.is_finite())
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(z, _)| self.map_derivative(z))
-    }
-
-    /// Slides the whole grid so that the grid point under the cursor follows
-    /// a drag or scroll of `delta` screen points, as the grid was drawn when
-    /// Alt went down: moving the source by δ moves its image by h'·δ.
-    fn move_grid(&mut self, cursor: Vec2, delta: Vec2) {
-        if self.grabbed_grid.is_none() {
-            // Alt went down in the same frame as this scroll or drag.
-            self.grabbed_grid = self.grab_grid(cursor);
-        }
-        let Some(derivative) = self.grabbed_grid else {
-            return;
-        };
-        let step = complex(delta) / self.pixels_per_unit / derivative;
-        if !step.is_finite() {
-            return;
-        }
-        // Near a critical point a small motion asks for a leap across the plane.
-        let step = step * (MAX_GRID_STEP / step.norm()).min(1.0);
-        self.x_min = (self.x_min + step.re).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
-        self.x_max = (self.x_max + step.re).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
-        self.y_min = (self.y_min + step.im).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
-        self.y_max = (self.y_max + step.im).clamp(-DOMAIN_LIMIT, DOMAIN_LIMIT);
+    /// Slides the source grid by `delta` screen points: the square itself,
+    /// whatever the map then does to it.
+    fn move_grid(&mut self, delta: Vec2) {
+        let step = delta * self.edge_units_per_point();
+        self.move_border(Border::XMin, step.x);
+        self.move_border(Border::XMax, step.x);
+        self.move_border(Border::YMin, step.y);
+        self.move_border(Border::YMax, step.y);
     }
 
     /// Moves the homotopy by `amount` screen points of travel (see
@@ -731,8 +709,6 @@ fn model(app: &App) -> Model {
         space_tap: false,
         scrolled_border: None,
         shift_held: false,
-        grabbed_grid: None,
-        alt_held: false,
         peek_button: false,
         peek: false,
         last_mouse: Vec2::ZERO,
@@ -740,6 +716,7 @@ fn model(app: &App) -> Model {
         touches: Vec::new(),
         panel: egui::Rect::NOTHING,
         panel_open: None,
+        slider_held: false,
     };
     model.set_scene(Scene::from_fragment(&fragment));
     model
@@ -812,16 +789,26 @@ fn update(app: &App, model: &mut Model) {
     let gap = 10.0;
     // egui caps a window's content at the screen height, leaving out the frame
     // and the gap, so a long panel would lose its bottom instead of scrolling.
-    let frame = egui::Frame::window(&ctx.global_style()).total_margin().sum().y;
+    let frame = egui::Frame::window(&ctx.global_style());
+    let frame_height = frame.total_margin().sum().y;
+    let was_held = std::mem::take(&mut model.slider_held);
+    let fade = ctx.animate_bool_with_time(
+        egui::Id::new("control window fade"),
+        was_held,
+        PANEL_FADE_SECONDS,
+    );
+    let opacity = egui::lerp(1.0..=HELD_PANEL_OPACITY, fade);
     let panel = egui::Window::new("Conformal Map")
         // egui remembers a window's size by id; closed it should shrink to the header.
         .id(egui::Id::new(("control window", open)))
         .title_bar(false)
+        .frame(frame.multiply_with_opacity(opacity))
         .anchor(egui::Align2::LEFT_TOP, [gap, gap])
-        .max_height(ctx.content_rect().height() - 2.0 * gap - frame)
+        .max_height(ctx.content_rect().height() - 2.0 * gap - frame_height)
         .resizable(false)
         .vscroll(open)
         .show(&ctx, |ui| {
+            ui.multiply_opacity(opacity);
             if panel_header(ui, open).clicked() {
                 model.panel_open = Some(!open);
             }
@@ -832,6 +819,10 @@ fn update(app: &App, model: &mut Model) {
         });
     if let Some(panel) = panel {
         model.panel = panel.response.rect;
+    }
+    // The window is already drawn, so the fade starts or ends on the next frame.
+    if model.slider_held != was_held {
+        ctx.request_repaint();
     }
     if let Some(body) = model.new_function.take() {
         app.command_scope(|mut commands| {
@@ -854,13 +845,6 @@ fn update(app: &App, model: &mut Model) {
         model.scrolled_border = None;
     }
     model.shift_held = shift;
-    let alt = ctx.input(|i| i.modifiers.alt);
-    if alt && !model.alt_held {
-        model.grabbed_grid = model.grab_grid(app.mouse());
-    } else if !alt {
-        model.grabbed_grid = None;
-    }
-    model.alt_held = alt;
     if keys.just_pressed(KeyCode::Space) {
         model.space_tap = !typing;
     }
@@ -1009,10 +993,7 @@ fn mouse_drag(
                 model.scrolled_border = model.grab_for_scroll(mouse);
                 Some(Drag::HeldBorder)
             }
-            _ if modifiers.alt => {
-                model.grabbed_grid = model.grab_grid(mouse);
-                Some(Drag::Grid)
-            }
+            _ if modifiers.alt => Some(Drag::Grid),
             _ => Some(Drag::Pan),
         };
         if let Some(drag) = drag {
@@ -1031,7 +1012,7 @@ fn mouse_drag(
         Drag::Pan => model.position += delta / model.pixels_per_unit,
         Drag::Parameter => model.move_parameter(delta * if modifiers.shift { FINE } else { 1.0 }),
         Drag::HeldBorder => model.drag_held_border(delta),
-        Drag::Grid => model.move_grid(mouse, delta),
+        Drag::Grid => model.move_grid(delta),
         Drag::Resolution => model.refine(delta.x + delta.y),
     }
     model.drag = Some((button, drag, mouse));
@@ -1172,7 +1153,9 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "peek at the source grid: hold the button or X");
     ui.horizontal(|ui| {
         let slider = egui::Slider::new(&mut model.homotopy, 0.0..=1.0).text("Homotopy");
-        if ui.add(slider).changed() {
+        let slider = ui.add(slider);
+        model.slider_held |= slider.dragged();
+        if slider.changed() {
             model.morph = Morph::Off;
         }
         let mut playing = model.morph != Morph::Off;
@@ -1186,35 +1169,51 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
     hint(ui, "or hold F + scroll or move the mouse");
 
     ui.separator();
+    // Fingers pinch to zoom.
+    let touch = ui.input(|i| i.has_touch_screen());
     ui.horizontal(|ui| {
-        ui.add(
-            egui::Slider::new(&mut model.pixels_per_unit, SCALE_RANGE)
-                .logarithmic(true)
-                .text("Zoom"),
-        );
+        if !touch {
+            let speed = model.pixels_per_unit * ZOOM_PER_POINT;
+            let zoom = ui.add(
+                egui::DragValue::new(&mut model.pixels_per_unit)
+                    .speed(speed)
+                    .range(SCALE_RANGE)
+                    .prefix("Zoom "),
+            );
+            model.slider_held |= zoom.dragged();
+        }
         if ui.button("Reset view").clicked() {
             model.reset_view();
         }
     });
-    hint(ui, "zoom: ctrl + scroll (around the cursor)");
+    if !touch {
+        hint(ui, "zoom: ctrl + scroll (around the cursor)");
+    }
     hint(ui, "pan: drag or scroll · reset view: H");
     hint(ui, "rest the cursor to see what landed under it");
 
     ui.separator();
-    ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_UI_RESOLUTION).text("Resolution"));
+    let resolution =
+        ui.add(egui::Slider::new(&mut model.resolution, 0.0..=MAX_UI_RESOLUTION).text("Resolution"));
+    model.slider_held |= resolution.dragged();
     hint(ui, "finer / coarser: ctrl + shift + scroll or drag");
     ui.label("Grid domain");
-    for (value, label) in [
-        (&mut model.x_min, "x min"),
-        (&mut model.x_max, "x max"),
-        (&mut model.y_min, "y min"),
-        (&mut model.y_max, "y max"),
-    ] {
-        ui.add(egui::Slider::new(value, -DOMAIN_LIMIT..=DOMAIN_LIMIT).text(label));
-    }
+    egui::Grid::new("grid domain").show(ui, |ui| {
+        for (axis, min, max) in [
+            ("x", &mut model.x_min, &mut model.x_max),
+            ("y", &mut model.y_min, &mut model.y_max),
+        ] {
+            ui.label(axis);
+            model.slider_held |= edge_field(ui, min).dragged();
+            ui.label("to");
+            model.slider_held |= edge_field(ui, max).dragged();
+            ui.end_row();
+        }
+    });
+    hint(ui, "drag a number, or click it to type one");
     hint(ui, "shift + scroll or drag across a border to move it");
     hint(ui, "(the one nearest the cursor) · alt + drag or scroll:");
-    hint(ui, "move the whole grid");
+    hint(ui, "move the source grid");
     hint(ui, "hold W / A / S / D (top / left / bottom / right edge)");
     hint(ui, "+ scroll or move the mouse to drag that edge;");
     hint(ui, "A + D or W + S slide the grid, all four move it");
@@ -1239,18 +1238,19 @@ fn controls(ui: &mut egui::Ui, model: &mut Model) {
         }
     });
     ui.horizontal(|ui| {
-        ui.add(
+        let re = ui.add(
             egui::DragValue::new(&mut model.parameter.re)
                 .speed(0.01)
                 .prefix("re "),
         );
-        ui.add(
+        let im = ui.add(
             egui::DragValue::new(&mut model.parameter.im)
                 .speed(0.01)
                 .prefix("im "),
         );
+        model.slider_held |= re.dragged() || im.dragged();
     });
-    xy_pad(ui, &mut model.parameter, 3.0);
+    model.slider_held |= xy_pad(ui, &mut model.parameter, 3.0).dragged();
     hint(ui, "drag the pad or right-drag the canvas, shift: 5× finer");
     hint(ui, "reset: R");
     hint(ui, "hold P + scroll or move the mouse");
@@ -1451,6 +1451,11 @@ fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     if ctx.is_pointer_over_egui() || ctx.text_edit_focused() {
         return;
     }
+    // Pressing a wheel can tilt it, and a tilted wheel repeats sideways scroll
+    // events for as long as it is held, which would pan the view away.
+    if app.mouse_buttons().pressed(MouseButton::Middle) {
+        return;
+    }
     let delta = match wheel.unit {
         MouseScrollUnit::Pixel => vec2(wheel.x, wheel.y),
         MouseScrollUnit::Line => vec2(wheel.x, wheel.y) * POINTS_PER_LINE,
@@ -1484,11 +1489,11 @@ fn mouse_wheel(app: &App, model: &mut Model, wheel: MouseWheel) {
     if modifiers.ctrl && modifiers.shift {
         model.refine(-dominant);
     } else if modifiers.ctrl {
-        model.zoom((dominant / 200.0).exp(), app.mouse());
+        model.zoom((dominant * ZOOM_PER_POINT).exp(), app.mouse());
     } else if modifiers.shift {
         model.scroll_held_border(app.mouse(), content, wheel.unit == MouseScrollUnit::Line);
     } else if modifiers.alt {
-        model.move_grid(app.mouse(), content);
+        model.move_grid(content);
     } else {
         model.position += content / model.pixels_per_unit;
     }
@@ -1847,8 +1852,21 @@ fn show_readout(ctx: &egui::Context, model: &Model, cursor: Vec2) {
         });
 }
 
+/// A field for a grid edge. The edges have no useful bounds, so a slider has
+/// no track to offer: this drags at a speed that follows the value, which
+/// reaches any size quickly and stays fine near zero, and takes typed values.
+fn edge_field(ui: &mut egui::Ui, edge: &mut f32) -> egui::Response {
+    let speed = EDGE_DRAG_SPEED * (edge.abs() as f64).max(1.0);
+    ui.add(
+        egui::DragValue::new(edge)
+            .speed(speed)
+            .range(-DOMAIN_LIMIT..=DOMAIN_LIMIT)
+            .max_decimals(4),
+    )
+}
+
 /// A square pad for dragging a complex value within `[-range, range]²`.
-fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) {
+fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) -> egui::Response {
     let size = ui.available_width().min(200.0);
     let (response, painter) =
         ui.allocate_painter(egui::Vec2::splat(size), egui::Sense::click_and_drag());
@@ -1887,6 +1905,7 @@ fn xy_pad(ui: &mut egui::Ui, value: &mut Complex<f32>, range: f32) {
         egui::FontId::monospace(11.0),
         ui.visuals().text_color(),
     );
+    response
 }
 
 #[cfg(test)]

@@ -84,7 +84,7 @@ impl GridLayout {
             if max < min {
                 0
             } else {
-                ((max - min) * lines_per_unit).round() as u32 + 1
+                (((max - min) * lines_per_unit).round() as u32).saturating_add(1)
             }
         };
         let mut level = level(resolution);
@@ -196,6 +196,15 @@ mod tests {
         assert!(layout.segment_count() <= 1_000_000, "{layout:?}");
         assert!(layout.spacing > 1.0 / 128.0, "lines should be coarser than asked");
         assert!(layout.h_segments >= 1 && layout.v_segments >= 1);
+    }
+
+    #[test]
+    fn budget_holds_for_the_largest_grid_the_controls_allow() {
+        for resolution in [0.0, 6.0] {
+            let layout = GridLayout::new(resolution, -1e12, 1e12, -1e12, 1e12, 2048.0, 1_000_000);
+            assert!(layout.segment_count() <= 1_000_000, "{layout:?}");
+            assert!(layout.h_lines >= 2 && layout.v_lines >= 2, "{layout:?}");
+        }
     }
 
     #[test]

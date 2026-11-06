@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn steps_stay_near_the_spacing_at_every_zoom() {
-        let mut ppu = 1.0;
+        let mut ppu = 1e-9;
         while ppu <= 1e6 {
             let spacing = Step::near(120.0, ppu).value() * ppu;
             assert!((75.0..=192.0).contains(&spacing), "{ppu}: {spacing}");

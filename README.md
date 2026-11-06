@@ -190,8 +190,8 @@ Both print the store path. The binary is `<path>/bin/conformal-visualizer`.
       the map has put it: the one drawn nearest the cursor when `shift` goes
       down, until you let go. Only the part of the motion across the border
       counts: a drag moves it as fast as the mouse, a scroll by grid squares
-    * `alt + scroll` or `alt` + drag slides the whole grid: the grid point
-      under the cursor when `alt` goes down follows the motion
+    * `alt + scroll` or `alt` + drag slides the source grid: the square itself
+      moves, and the map draws its image wherever that lands
     * `ctrl + shift + scroll` or `ctrl + shift` + drag makes the grid finer
       or coarser
     * hold `w` / `a` / `s` / `d` and scroll or move the mouse to drag the top /

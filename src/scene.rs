@@ -186,11 +186,13 @@ impl Scene {
     /// Position and zoom, precise to a fraction of a screen point.
     fn view(&self) -> String {
         let decimals = (self.pixels_per_unit.max(1.0).log10().ceil() as usize + 1).clamp(2, 7);
+        // Far zoomed out it takes a few digits past the leading zeros.
+        let zoom_decimals = (2.0 - self.pixels_per_unit.log10().ceil()).max(1.0) as usize;
         format!(
             "{},{},{}",
             number(self.position[0], decimals),
             number(self.position[1], decimals),
-            number(self.pixels_per_unit, 1)
+            number(self.pixels_per_unit, zoom_decimals)
         )
     }
 }
@@ -306,6 +308,19 @@ mod tests {
         let fragment = scene.to_fragment();
         assert!(!fragment.contains(['(', ')', ' ', '^']), "{fragment}");
         assert_eq!(Scene::from_fragment(&format!("#{fragment}")), scene);
+    }
+
+    #[test]
+    fn a_view_zoomed_far_out_round_trips() {
+        for pixels_per_unit in [0.5, 1e-3, 1e-9] {
+            let scene = Scene {
+                pixels_per_unit,
+                ..Scene::example(0)
+            };
+            let decoded = Scene::from_fragment(&scene.to_fragment());
+            let ratio = decoded.pixels_per_unit / pixels_per_unit;
+            assert!((0.99..1.01).contains(&ratio), "{pixels_per_unit}: {ratio}");
+        }
     }
 
     #[test]
